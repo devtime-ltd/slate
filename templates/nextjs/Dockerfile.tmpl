@@ -1,0 +1,19 @@
+FROM node:22-slim
+
+ARG APP_UID=1000
+ARG APP_GID=1000
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN if [ "${APP_GID}" != "1000" ]; then groupmod -g ${APP_GID} node; fi \
+    && if [ "${APP_UID}" != "1000" ]; then usermod -u ${APP_UID} node; fi
+
+WORKDIR /app
+
+USER node
+
+EXPOSE 3000
+
+CMD ["npm", "run", "dev", "--", "-H", "0.0.0.0"]

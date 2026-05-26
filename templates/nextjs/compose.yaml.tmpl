@@ -1,0 +1,45 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: .slate/Dockerfile
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    entrypoint: ["sh", "/usr/local/bin/entrypoint"]
+    command: ["sh", "-c", "npm install && exec npm run dev -- -H 0.0.0.0"]
+    ports:
+      - "3000"
+    environment:
+      NPM_CONFIG_CACHE: /app/.slate/npm-cache
+    volumes:
+      - ..:/app
+      - ${MAIN_ROOT:?Run via slate}/.env:/run/main-env/.env:ro
+      - ${SLATE_ENTRYPOINT:?Run via slate}:/usr/local/bin/entrypoint:ro
+    env_file:
+      - ../.env.container
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+      POSTGRES_DB: ${DB_DATABASE:-app}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025"
+      - "1025"
+
+volumes:
+  postgres_data:

@@ -1,0 +1,12 @@
+<VirtualHost *:8080>
+    DocumentRoot /app/public
+
+    <Directory /app/public>
+        Options FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog /dev/stderr
+    CustomLog /dev/stdout combined
+</VirtualHost>

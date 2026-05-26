@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1.6
+FROM php:8.3-apache
+
+ARG APP_UID=1000
+ARG APP_GID=1000
+
+ENV APACHE_DOCUMENT_ROOT=/app/public
+
+# Base system deps. Add project-specific packages (e.g. ghostscript) below.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        libfreetype6-dev \
+        libicu-dev \
+        libjpeg62-turbo-dev \
+        libonig-dev \
+        libpng-dev \
+        libsqlite3-dev \
+        libxml2-dev \
+        libzip-dev \
+        unzip \
+        zip \
+    && rm -rf /var/lib/apt/lists/*
+
+# PHP extensions. Add project-specific extensions (e.g. imagick) below.
+RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j"$(nproc)" \
+        bcmath \
+        exif \
+        gd \
+        intl \
+        opcache \
+        pcntl \
+        pdo_mysql \
+        pdo_sqlite \
+        soap \
+        zip
+
+COPY --from=composer:latest /usr/bin/composer /usr/local/bin/composer
+
+RUN a2enmod rewrite remoteip headers
+
+RUN sed -ri 's/^Listen 80$/Listen 8080/' /etc/apache2/ports.conf
+
+COPY .slate/000-default.conf /etc/apache2/sites-available/000-default.conf
+
+RUN if [ "${APP_GID}" != "33" ]; then groupmod -g ${APP_GID} www-data; fi \
+    && if [ "${APP_UID}" != "33" ]; then usermod -u ${APP_UID} -g ${APP_GID} www-data; fi \
+    && chown -R www-data:www-data /var/log/apache2 /var/lock/apache2 /var/run/apache2
+
+RUN mkdir -p /var/www/.config/psysh /var/www/.composer \
+    && chown -R www-data:www-data /var/www
+
+WORKDIR /app
+
+USER www-data
+
+EXPOSE 8080
+
+CMD ["apache2-foreground"]
