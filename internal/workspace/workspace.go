@@ -1,10 +1,11 @@
 package workspace
 
 import (
+	"bytes"
 	"fmt"
 	"os/exec"
-	"regexp"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -28,20 +29,30 @@ func ValidateName(name string) error {
 	return nil
 }
 
+var mainRootOverride string
+
+func SetMainRootOverride(path string) {
+	mainRootOverride = path
+}
+
 func MainRoot() (string, error) {
+	if mainRootOverride != "" {
+		return mainRootOverride, nil
+	}
 	toplevel, err := gitOutput("rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", fmt.Errorf("not inside a git repo")
 	}
+	// --git-common-dir returns the shared .git path. From a worktree it's
+	// typically absolute; from the main checkout it's relative (".git").
 	commonDir, err := gitOutputInDir(toplevel, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return "", err
 	}
-	absCommon, err := filepath.Abs(filepath.Join(toplevel, filepath.Dir(commonDir)))
-	if err != nil {
-		return "", err
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(toplevel, commonDir)
 	}
-	return absCommon, nil
+	return filepath.Dir(commonDir), nil
 }
 
 func ProjectName(override string) (string, error) {
@@ -84,25 +95,53 @@ func WorkspaceDir(name string) (string, error) {
 	return filepath.Join(root, name), nil
 }
 
+// ResolveFromCwd returns the workspace name and dir if the CWD is inside
+// a slate workspace (under <mainRoot>/.slate/workspaces/<name>). Errors if
+// CWD is the main checkout or anywhere else.
 func ResolveFromCwd() (string, string, error) {
 	toplevel, err := gitOutput("rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", "", fmt.Errorf("not inside a git worktree")
 	}
-	name := filepath.Base(toplevel)
-	return name, toplevel, nil
+	wsRoot, err := WorkspacesRoot()
+	if err != nil {
+		return "", "", err
+	}
+	if filepath.Dir(toplevel) != wsRoot {
+		return "", "", fmt.Errorf("not inside a slate workspace (pass <name> or cd into one)")
+	}
+	return filepath.Base(toplevel), toplevel, nil
 }
 
 func CreateWorktree(dir, branch string) error {
-	err := exec.Command("git", "worktree", "add", dir, "-b", branch).Run()
-	if err != nil {
-		err = exec.Command("git", "worktree", "add", dir, branch).Run()
+	if out, err := runGit("worktree", "add", dir, "-b", branch); err == nil {
+		return nil
+	} else if !strings.Contains(out, "already exists") {
+		// fresh branch creation failed for a reason other than "branch exists"
+		return fmt.Errorf("git worktree add: %s", strings.TrimSpace(out))
 	}
-	return err
+
+	// Branch already exists - check it out into the worktree.
+	if out, err := runGit("worktree", "add", dir, branch); err != nil {
+		return fmt.Errorf("git worktree add: %s", strings.TrimSpace(out))
+	}
+	return nil
 }
 
 func RemoveWorktree(dir string) error {
-	return exec.Command("git", "worktree", "remove", "--force", dir).Run()
+	if out, err := runGit("worktree", "remove", "--force", dir); err != nil {
+		return fmt.Errorf("git worktree remove: %s", strings.TrimSpace(out))
+	}
+	return nil
+}
+
+func runGit(args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err := cmd.Run()
+	return buf.String(), err
 }
 
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"runtime"
+	"strings"
 
 	"github.com/devtime-ltd/slate/internal/compose"
 	"github.com/devtime-ltd/slate/internal/config"
@@ -21,7 +22,11 @@ var shellCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		env, err := compose.NewEnv(name, wsDir)
+		hostname, err := resolveHostname(name)
+		if err != nil {
+			return err
+		}
+		env, err := compose.NewEnv(name, wsDir, hostname)
 		if err != nil {
 			return err
 		}
@@ -51,7 +56,11 @@ var logsCmd = &cobra.Command{
 			return err
 		}
 
-		env, err := compose.NewEnv(name, wsDir)
+		hostname, err := resolveHostname(name)
+		if err != nil {
+			return err
+		}
+		env, err := compose.NewEnv(name, wsDir, hostname)
 		if err != nil {
 			return err
 		}
@@ -114,12 +123,15 @@ func registerExecCommand(name string, t config.ExecTool) {
 			if err != nil {
 				return err
 			}
-			env, err := compose.NewEnv(wsName, wsDir)
+			hostname, err := resolveHostname(wsName)
 			if err != nil {
 				return err
 			}
-			fullCmd := make([]string, len(t.Command))
-			copy(fullCmd, t.Command)
+			env, err := compose.NewEnv(wsName, wsDir, hostname)
+			if err != nil {
+				return err
+			}
+			fullCmd := append([]string(nil), t.Command...)
 			fullCmd = append(fullCmd, args...)
 			return compose.Exec(env, t.Service, fullCmd...)
 		},
@@ -142,7 +154,12 @@ func registerDBCommand(name string, t config.DBTool) {
 		if err != nil {
 			return err
 		}
-		env, err := compose.NewEnv(wsName, wsDir)
+		projectName, err := resolveProject()
+		if err != nil {
+			return err
+		}
+		hostname := workspace.HostnameForProject(projectName, wsName)
+		env, err := compose.NewEnv(wsName, wsDir, hostname)
 		if err != nil {
 			return err
 		}
@@ -152,9 +169,11 @@ func registerDBCommand(name string, t config.DBTool) {
 			return fmt.Errorf("%s service not running", t.Service)
 		}
 
-		projectName, _ := workspace.ProjectName("")
 		dbName := scaffold.DeriveDBName(projectName, wsName, "default")
-		secretKey, _ := config.EnsureSecretKey()
+		secretKey, err := config.EnsureSecretKey()
+		if err != nil {
+			return fmt.Errorf("getting secret key: %w", err)
+		}
 		password := config.DerivePassword(secretKey, projectName, wsName, t.PasswordSalt)
 		connURL := t.Scheme + "://" + t.User + ":" + url.PathEscape(password) + "@127.0.0.1:" + port + "/" + dbName
 
@@ -163,13 +182,14 @@ func registerDBCommand(name string, t config.DBTool) {
 			return nil
 		}
 
-		hostname, _ := workspace.Hostname(wsName)
 		fmt.Printf("  Host:     %s.test\n", hostname)
 		fmt.Printf("  Port:     %s\n", port)
 		fmt.Printf("  User:     %s\n", t.User)
-		fmt.Printf("  Password: %s\n", password)
+		fmt.Printf("  Password: %s\n", strings.Repeat("•", len(password)))
 		fmt.Printf("  Database: %s\n", dbName)
-		fmt.Printf("  URL:      %s\n", connURL)
+		fmt.Println()
+		fmt.Println("  Show password / URL: --url")
+		fmt.Println("  Open in client:      --open")
 
 		if openFlag {
 			opener := "xdg-open"

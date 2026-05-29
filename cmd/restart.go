@@ -27,6 +27,9 @@ func init() {
 }
 
 func runRestart(cmd *cobra.Command, args []string) error {
+	if err := requireDocker(); err != nil {
+		return err
+	}
 	name := args[0]
 	if err := workspace.ValidateName(name); err != nil {
 		return err
@@ -36,13 +39,20 @@ func runRestart(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkNotProvisioning(wsDir); err != nil {
+		return err
+	}
 
-	env, err := compose.NewEnv(name, wsDir)
+	hostname, err := resolveHostname(name)
 	if err != nil {
 		return err
 	}
 
-	hostname, _ := workspace.Hostname(name)
+	env, err := compose.NewEnv(name, wsDir, hostname)
+	if err != nil {
+		return err
+	}
+
 
 	if len(args) > 1 {
 		service := args[1]
@@ -60,14 +70,16 @@ func runRestart(cmd *cobra.Command, args []string) error {
 	mainRoot, _ := workspace.MainRoot()
 	cfg, _ := config.LoadProject(mainRoot)
 
-	httpPort, httpsPort, tls := DetectProxyPorts()
-	proxyConfig := config.WithPorts(httpPort, httpsPort, tls)
-
 	services := buildServicePorts(env, cfg)
-	if err := proxy.Register(proxyConfig, hostname, services); err != nil {
+	if err := proxy.Register(hostname, services); err != nil {
 		fmt.Printf("  warning: proxy re-registration failed: %v\n", err)
 	}
 
-	fmt.Printf("✅ %s restarted\n", hostname)
+	proxyConfig, _ := loadProxyConfig(false)
+
+	fmt.Println()
+	fmt.Println(tick() + " " + hostname + " restarted")
+	fmt.Println()
+	fmt.Println(workspaceURLBlock(env, hostname, cfg, proxyConfig))
 	return nil
 }

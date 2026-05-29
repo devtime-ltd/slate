@@ -29,6 +29,9 @@ func init() {
 }
 
 func runRm(cmd *cobra.Command, args []string) error {
+	if err := requireDocker(); err != nil {
+		return err
+	}
 	name := args[0]
 	if err := workspace.ValidateName(name); err != nil {
 		return err
@@ -42,7 +45,10 @@ func runRm(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("workspace '%s' not found", name)
 	}
 
-	hostname, _ := workspace.Hostname(name)
+	hostname, err := resolveHostname(name)
+	if err != nil {
+		return err
+	}
 
 	if !rmForce {
 		fmt.Printf("This will destroy %s (containers, volumes, worktree). Continue? [y/N] ", hostname)
@@ -54,7 +60,9 @@ func runRm(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	env, err := compose.NewEnv(name, wsDir)
+	killProvisioningLock(wsDir)
+
+	env, err := compose.NewEnv(name, wsDir, hostname)
 	if err != nil {
 		return err
 	}
@@ -62,12 +70,12 @@ func runRm(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Destroying %s...\n", hostname)
 	compose.Run(env, "down", "-v")
 
-	httpPort, httpsPort, tls := DetectProxyPorts()
-	proxyConfig := config.WithPorts(httpPort, httpsPort, tls)
-	proxy.Unregister(proxyConfig, hostname, []string{"vite", "mailpit"})
+	mainRoot, _ := workspace.MainRoot()
+	cfg, _ := config.LoadProject(mainRoot)
+	proxy.Unregister(hostname, scaffoldSubdomains(cfg))
 
 	workspace.RemoveWorktree(wsDir)
 
-	fmt.Printf("✅ %s removed\n", hostname)
+	fmt.Printf("" + tick() + " %s removed\n", hostname)
 	return nil
 }

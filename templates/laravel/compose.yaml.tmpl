@@ -12,6 +12,7 @@ x-app-base: &app-base
   volumes:
     - ..:/app
     - ${MAIN_ROOT:?Run via slate}/.env:/run/main-env/.env:ro
+    - ${MAIN_ROOT}/.git:${MAIN_ROOT}/.git:ro
     - ${SLATE_ENTRYPOINT:?Run via slate}:/usr/local/bin/entrypoint:ro
   depends_on:
     mysql:
@@ -60,6 +61,7 @@ services:
     volumes:
       - ..:/app
       - ${MAIN_ROOT:?Run via slate}/.env:/run/main-env/.env:ro
+      - ${MAIN_ROOT}/.git:${MAIN_ROOT}/.git:ro
       - ${SLATE_ENTRYPOINT:?Run via slate}:/usr/local/bin/entrypoint:ro
 
   mailpit:

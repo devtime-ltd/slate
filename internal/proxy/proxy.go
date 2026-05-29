@@ -5,42 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os/exec"
-	"strings"
 	"time"
-
-	"github.com/devtime-ltd/slate/internal/config"
-)
-
-type backend string
-
-const (
-	backendCaddy backend = "caddy"
-	backendHerd  backend = "herd"
 )
 
 // ServicePorts maps subdomain prefixes to host ports.
 // Empty key "" is the main app. "vite" becomes vite.hostname.test, etc.
 type ServicePorts map[string]string
-
-func detect(cfg config.GlobalConfig) (backend, error) {
-	pref := strings.ToLower(cfg.Proxy)
-
-	if pref == "caddy" || pref == "auto" || pref == "" {
-		if caddyAvailable() {
-			return backendCaddy, nil
-		}
-	}
-	if pref == "herd" || pref == "auto" || pref == "" {
-		if herdAvailable() {
-			return backendHerd, nil
-		}
-	}
-	if pref != "auto" && pref != "" {
-		return "", fmt.Errorf("configured proxy '%s' is not available", pref)
-	}
-	return "", fmt.Errorf("no HTTPS proxy running. Run `slate proxy start` or install Caddy/Herd")
-}
 
 func caddyAvailable() bool {
 	client := http.Client{Timeout: 2 * time.Second}
@@ -52,15 +22,9 @@ func caddyAvailable() bool {
 	return true
 }
 
-func herdAvailable() bool {
-	_, err := exec.LookPath("herd")
-	return err == nil
-}
-
-func Register(cfg config.GlobalConfig, hostname string, services ServicePorts) error {
-	b, err := detect(cfg)
-	if err != nil {
-		return err
+func Register(hostname string, services ServicePorts) error {
+	if !caddyAvailable() {
+		return fmt.Errorf("HTTPS proxy not running. Run `slate proxy start` or `slate setup`")
 	}
 
 	for subdomain, port := range services {
@@ -74,38 +38,60 @@ func Register(cfg config.GlobalConfig, hostname string, services ServicePorts) e
 			routeID = "slate__" + subdomain + "." + hostname
 		}
 
-		switch b {
-		case backendHerd:
-			exec.Command("herd", "proxy", host, "http://127.0.0.1:"+port, "--secure").Run()
-		case backendCaddy:
-			caddyDeleteRoute(routeID)
-			caddyAddRoute(routeID, host+".test", port)
+		fullHost := host + ".test"
+		deleteRoutesByHost(fullHost)
+		if err := caddyAddRoute(routeID, fullHost, port); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func Unregister(cfg config.GlobalConfig, hostname string, subdomains []string) error {
-	b, err := detect(cfg)
-	if err != nil {
+func Unregister(hostname string, subdomains []string) error {
+	if !caddyAvailable() {
 		return nil
 	}
 
-	hosts := []string{hostname}
+	hosts := []string{hostname + ".test"}
 	for _, sub := range subdomains {
-		hosts = append(hosts, sub+"."+hostname)
+		hosts = append(hosts, sub+"."+hostname+".test")
 	}
 
 	for _, host := range hosts {
-		routeID := "slate__" + host
-		switch b {
-		case backendHerd:
-			exec.Command("herd", "unproxy", host).Run()
-		case backendCaddy:
-			caddyDeleteRoute(routeID)
-		}
+		deleteRoutesByHost(host)
 	}
 	return nil
+}
+
+// deleteRoutesByHost removes any registered route whose match.host contains
+// the given host. Handles cleanup of routes with stale IDs (e.g. left over
+// from a slate upgrade that changed the ID scheme).
+func deleteRoutesByHost(host string) {
+	resp, err := http.Get("http://127.0.0.1:2019/config/apps/http/servers/slate/routes")
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	var routes []struct {
+		ID    string `json:"@id"`
+		Match []struct {
+			Host []string `json:"host"`
+		} `json:"match"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&routes); err != nil {
+		return
+	}
+
+	for _, r := range routes {
+		for _, m := range r.Match {
+			for _, h := range m.Host {
+				if h == host {
+					caddyDeleteRoute(r.ID)
+				}
+			}
+		}
+	}
 }
 
 func caddyAddRoute(id, host, port string) error {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 )
 
 const proxyContainerName = "slate-proxy"
-const proxyImage = "caddy:latest"
+const proxyImage = "caddy:2.10"
 
 var proxyCmd = &cobra.Command{
 	Use:   "proxy",
@@ -101,7 +102,7 @@ func runProxyStart(cmd *cobra.Command, args []string) error {
 				if len(parts) > 0 {
 					process = parts[0]
 				}
-				fmt.Printf("⚠️  Port %d is in use by %s.\n", p, process)
+				fmt.Printf("" + warn() + " Port %d is in use by %s.\n", p, process)
 				fmt.Printf("   Stop it first, or configure ports in ~/.config/slate/config.yml\n")
 				return fmt.Errorf("port %d is already in use", p)
 			}
@@ -132,6 +133,7 @@ func runProxyStart(cmd *cobra.Command, args []string) error {
 		"run", "-d",
 		"--name", proxyContainerName,
 		"--restart", "unless-stopped",
+		"--add-host", "host.docker.internal:host-gateway",
 		"-p", fmt.Sprintf("%d:80", httpPort),
 		"-p", "127.0.0.1:2019:2019",
 		"-v", "slate-proxy-data:/data",
@@ -162,10 +164,10 @@ func runProxyStart(cmd *cobra.Command, args []string) error {
 			initProxyServer(useTLS)
 
 			if useTLS {
-				fmt.Printf("\n✅ Proxy running (HTTP %d, HTTPS %d)\n", httpPort, httpsPort)
+				fmt.Printf("\n" + tick() + " Proxy running (HTTP %d, HTTPS %d)\n", httpPort, httpsPort)
 				fmt.Println("   Run `slate proxy trust` to install the CA certificate.")
 			} else {
-				fmt.Printf("\n✅ Proxy running (HTTP %d)\n", httpPort)
+				fmt.Printf("\n" + tick() + " Proxy running (HTTP %d)\n", httpPort)
 			}
 			fmt.Println("   Admin API: http://127.0.0.1:2019")
 			return nil
@@ -185,24 +187,19 @@ func runProxyStop(cmd *cobra.Command, args []string) error {
 	fmt.Println("Stopping proxy...")
 	exec.Command("docker", "stop", proxyContainerName).Run()
 	exec.Command("docker", "rm", proxyContainerName).Run()
-	fmt.Println("✅ Proxy stopped")
+	fmt.Println("" + tick() + " Proxy stopped")
 	return nil
 }
 
 func runProxyStatus(cmd *cobra.Command, args []string) error {
 	if isProxyRunning() {
-		fmt.Println("✅ Proxy is running")
+		fmt.Println("" + tick() + " Proxy is running")
 		if isProxyAPIReady() {
 			fmt.Println("   Admin API: reachable at http://127.0.0.1:2019")
 		}
 
-		// Show registered routes
-		resp, err := http.Get("http://127.0.0.1:2019/config/apps/http/servers/")
-		if err == nil {
-			defer resp.Body.Close()
-		}
 	} else {
-		fmt.Println("❌ Proxy is not running")
+		fmt.Println("" + cross() + " Proxy is not running")
 		fmt.Println("   Run `slate proxy start` to start it.")
 	}
 	return nil
@@ -250,10 +247,10 @@ func runProxyTrust(cmd *cobra.Command, args []string) error {
 
 	if err := trustCmd.Run(); err != nil {
 		fmt.Printf("\nManual install: sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain %s\n", certPath)
-		return nil
+		return fmt.Errorf("trust install failed: %w", err)
 	}
 
-	fmt.Println("✅ CA certificate trusted. HTTPS will work for all *.test domains.")
+	fmt.Println("" + tick() + " CA certificate trusted. HTTPS will work for all *.test domains.")
 	return nil
 }
 
@@ -296,6 +293,22 @@ func initProxyServer(tls bool) {
 	resp.Body.Close()
 }
 
+// loadProxyConfig builds a config.GlobalConfig with detected proxy ports.
+// When withSecret is true, also resolves and attaches the installation secret
+// key (needed for generating .env.container).
+func loadProxyConfig(withSecret bool) (config.GlobalConfig, error) {
+	httpPort, httpsPort, tls := DetectProxyPorts()
+	cfg := config.WithPorts(httpPort, httpsPort, tls)
+	if withSecret {
+		secretKey, err := config.EnsureSecretKey()
+		if err != nil {
+			return cfg, fmt.Errorf("ensuring secret key: %w", err)
+		}
+		cfg.SecretKey = secretKey
+	}
+	return cfg, nil
+}
+
 func DetectProxyPorts() (httpPort, httpsPort int, tls bool) {
 	if !isProxyRunning() {
 		cfg, _ := config.LoadGlobal()
@@ -326,8 +339,10 @@ func DetectProxyPorts() (httpPort, httpsPort int, tls bool) {
 		if lastColon < 0 {
 			continue
 		}
-		port := 0
-		fmt.Sscanf(parts[1][lastColon+1:], "%d", &port)
+		port, err := strconv.Atoi(parts[1][lastColon+1:])
+		if err != nil || port == 0 {
+			continue
+		}
 		if strings.HasPrefix(parts[0], "443/") {
 			httpsPort = port
 			tls = true

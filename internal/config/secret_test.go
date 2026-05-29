@@ -3,8 +3,14 @@ package config
 import "testing"
 
 func TestGenerateSecretKey(t *testing.T) {
-	key1 := GenerateSecretKey()
-	key2 := GenerateSecretKey()
+	key1, err := GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key2, err := GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if key1 == key2 {
 		t.Error("two generated keys should not be equal")
 	}

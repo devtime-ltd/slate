@@ -11,13 +11,14 @@ type GlobalConfig struct {
 	HTTPPort  int    `yaml:"http_port"`
 	HTTPSPort int    `yaml:"https_port"`
 	TLS       bool   `yaml:"tls"`
-	Proxy     string `yaml:"proxy"`
 	SecretKey string `yaml:"secret_key"`
+	Editor    string `yaml:"editor"`
 }
 
+// Tool is implemented by ExecTool and DBTool. The marker method keeps the
+// interface closed to slate-defined tool kinds.
 type Tool interface {
-	ServiceName() string
-	Kind() string
+	isTool()
 }
 
 type ExecTool struct {
@@ -25,8 +26,7 @@ type ExecTool struct {
 	Command []string `yaml:"command"`
 }
 
-func (t ExecTool) ServiceName() string { return t.Service }
-func (t ExecTool) Kind() string        { return "exec" }
+func (ExecTool) isTool() {}
 
 type DBTool struct {
 	Service      string `yaml:"service"`
@@ -36,12 +36,12 @@ type DBTool struct {
 	PasswordSalt string `yaml:"password_salt"`
 }
 
-func (t DBTool) ServiceName() string { return t.Service }
-func (t DBTool) Kind() string        { return "db" }
+func (DBTool) isTool() {}
 
 type ProjectConfig struct {
 	Scaffold string              `yaml:"scaffold"`
 	Project  string              `yaml:"project"`
+	Editor   string              `yaml:"editor"`
 	New      string              `yaml:"new"`
 	Up       string              `yaml:"up"`
 	Env      map[string]string   `yaml:"env"`
@@ -94,7 +94,6 @@ func DefaultGlobal() GlobalConfig {
 		HTTPPort:  80,
 		HTTPSPort: 443,
 		TLS:       true,
-		Proxy:     "auto",
 	}
 }
 
@@ -176,8 +175,8 @@ func LoadGlobal() (GlobalConfig, error) {
 		HTTPPort  *int    `yaml:"http_port"`
 		HTTPSPort *int    `yaml:"https_port"`
 		TLS       *bool   `yaml:"tls"`
-		Proxy     *string `yaml:"proxy"`
 		SecretKey *string `yaml:"secret_key"`
+		Editor    *string `yaml:"editor"`
 	}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return cfg, err
@@ -191,11 +190,11 @@ func LoadGlobal() (GlobalConfig, error) {
 	if raw.TLS != nil {
 		cfg.TLS = *raw.TLS
 	}
-	if raw.Proxy != nil {
-		cfg.Proxy = *raw.Proxy
-	}
 	if raw.SecretKey != nil {
 		cfg.SecretKey = *raw.SecretKey
+	}
+	if raw.Editor != nil {
+		cfg.Editor = *raw.Editor
 	}
 	return cfg, nil
 }

@@ -3,8 +3,6 @@ package cmd
 import (
 	"runtime"
 
-	"github.com/devtime-ltd/slate/internal/config"
-	"github.com/devtime-ltd/slate/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -18,9 +16,11 @@ var openCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		hostname, _ := workspace.Hostname(name)
-		httpPort, httpsPort, tls := DetectProxyPorts()
-		proxyConfig := config.WithPorts(httpPort, httpsPort, tls)
+		hostname, err := resolveHostname(name)
+		if err != nil {
+			return err
+		}
+		proxyConfig, _ := loadProxyConfig(false)
 		url := proxyConfig.WorkspaceURL(hostname)
 
 		opener := "xdg-open"

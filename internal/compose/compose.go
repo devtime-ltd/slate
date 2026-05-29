@@ -33,7 +33,7 @@ func buildCmd(env Env, interactive bool, args ...string) *exec.Cmd {
 	if _, err := os.Stat(filesOverride); err == nil {
 		cmdArgs = append(cmdArgs, "-f", filesOverride)
 	}
-	cmdArgs = append(cmdArgs, "--env-file", env.WorkspaceDir+"/.env.container")
+	cmdArgs = append(cmdArgs, "--env-file", filepath.Join(env.WorkspaceDir, ".env.container"))
 	cmdArgs = append(cmdArgs, args...)
 
 	cmd := exec.Command("docker", cmdArgs...)

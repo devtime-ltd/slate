@@ -88,6 +88,14 @@ func (s *laravelScaffold) DefaultFiles() map[string]string {
 	}
 }
 
+func (s *laravelScaffold) Subdomains() map[string]Subdomain {
+	return map[string]Subdomain{
+		"":        {Service: "app", Port: 8080},
+		"vite":    {Service: "vite", Port: 5173},
+		"mailpit": {Service: "mailpit", Port: 8025},
+	}
+}
+
 func (s *laravelScaffold) Tools() map[string]config.Tool {
 	return map[string]config.Tool{
 		"composer": config.ExecTool{Service: "app", Command: []string{"composer"}},

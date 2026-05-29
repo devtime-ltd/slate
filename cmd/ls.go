@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/devtime-ltd/slate/internal/compose"
 	"github.com/charmbracelet/lipgloss"
@@ -36,13 +37,17 @@ type composeProject struct {
 }
 
 var (
-	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	greenStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	yellowStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	borderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
+	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	greenStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	yellowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	redStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	borderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
 )
 
 func runLs(cmd *cobra.Command, args []string) error {
+	if err := requireDocker(); err != nil {
+		return err
+	}
 	running := map[string]bool{}
 	if composeOut, err := exec.Command("docker", "compose", "ls", "--format", "json").Output(); err == nil {
 		var projects []composeProject
@@ -52,8 +57,7 @@ func runLs(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	httpPort, httpsPort, tls := DetectProxyPorts()
-	globalCfg := config.WithPorts(httpPort, httpsPort, tls)
+	globalCfg, _ := loadProxyConfig(false)
 
 	if lsAll {
 		return listAllProjects(running, globalCfg)
@@ -66,6 +70,35 @@ func statusLabel(isRunning bool) string {
 		return greenStyle.Render("running")
 	}
 	return yellowStyle.Render("stopped")
+}
+
+// provisioningRow returns (statusLabel, urlOrLogPath) when the workspace is
+// currently provisioning or has failed, and ("", "") otherwise. For failed
+// rows the URL column shows the provision log path so the user has an
+// actionable next step inline.
+func provisioningRow(wsDir string) (string, string) {
+	logHint := dimStyle.Render("log: ") + filepath.Join(wsDir, ".slate", "provision.log")
+	pid, alive := readProvisioningLock(wsDir)
+	if pid > 0 && alive {
+		return yellowStyle.Render("provisioning"), logHint
+	}
+	if pid > 0 && !alive {
+		return redStyle.Render("failed"), logHint
+	}
+	if _, err := os.Stat(filepath.Join(wsDir, ".slate", "provisioning.failed")); err == nil {
+		return redStyle.Render("failed"), logHint
+	}
+	return "", ""
+}
+
+// processAlive returns whether a pid is still running. Unix-only (uses signal 0);
+// slate targets darwin/linux so no build tag is needed today.
+func processAlive(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
 }
 
 func listCurrentProject(running map[string]bool, globalCfg config.GlobalConfig) error {
@@ -101,7 +134,7 @@ func listCurrentProject(running map[string]bool, globalCfg config.GlobalConfig) 
 }
 
 func listAllProjects(running map[string]bool, globalCfg config.GlobalConfig) error {
-	projects := config.ListProjects()
+	projects := config.ProjectsByName()
 	if len(projects) == 0 {
 		fmt.Println("No projects registered. Run `slate init` in a project first.")
 		return nil
@@ -119,8 +152,7 @@ func listAllProjects(running map[string]bool, globalCfg config.GlobalConfig) err
 		})
 
 	hasRows := false
-	for _, projectPath := range projects {
-		projectName := filepath.Base(projectPath)
+	for projectName, projectPath := range projects {
 		gitCmd := exec.Command("git", "worktree", "list", "--porcelain")
 		gitCmd.Dir = projectPath
 		out, err := gitCmd.Output()
@@ -138,16 +170,21 @@ func listAllProjects(running map[string]bool, globalCfg config.GlobalConfig) err
 			if path == projectPath {
 				continue
 			}
-			wsName := path[strings.LastIndex(path, "/")+1:]
+			wsName := filepath.Base(path)
 			hostname := workspace.HostnameForProject(projectName, wsName)
 			isRunning := running["slate__"+hostname]
 
-			url := globalCfg.WorkspaceURL(hostname)
-			if isRunning {
-				url += serviceURLs(wsName, hostname, cfg, globalCfg)
+			wsDir := filepath.Join(projectPath, ".slate", "workspaces", wsName)
+			status, url := statusLabel(isRunning), globalCfg.WorkspaceURL(hostname)
+			if pStatus, pURL := provisioningRow(wsDir); pStatus != "" {
+				status, url = pStatus, pURL
+			} else if isRunning {
+				if env, err := compose.NewEnv(wsName, wsDir, hostname); err == nil {
+					url = workspaceURLBlock(env, hostname, cfg, globalCfg)
+				}
 			}
 
-			t.Row(projectName, wsName, statusLabel(isRunning), url)
+			t.Row(projectName, wsName, status, url)
 			hasRows = true
 		}
 	}
@@ -170,6 +207,7 @@ func collectWorktrees(mainRoot string, running map[string]bool, globalCfg config
 	}
 
 	cfg, _ := config.LoadProject(mainRoot)
+	projectName, _ := workspace.ProjectName(cfg.Project)
 
 	var rows [][]string
 	for _, line := range strings.Split(string(out), "\n") {
@@ -180,47 +218,23 @@ func collectWorktrees(mainRoot string, running map[string]bool, globalCfg config
 		if path == mainRoot {
 			continue
 		}
-		name := path[strings.LastIndex(path, "/")+1:]
-		hostname, _ := workspace.Hostname(name)
+		name := filepath.Base(path)
+		hostname := workspace.HostnameForProject(projectName, name)
 		isRunning := running["slate__"+hostname]
 
-		url := globalCfg.WorkspaceURL(hostname)
-		if isRunning {
-			url += serviceURLs(name, hostname, cfg, globalCfg)
+		wsDir, _ := workspace.WorkspaceDir(name)
+		status, url := statusLabel(isRunning), globalCfg.WorkspaceURL(hostname)
+		if wsDir != "" {
+			if pStatus, pURL := provisioningRow(wsDir); pStatus != "" {
+				status, url = pStatus, pURL
+			} else if isRunning {
+				if env, err := compose.NewEnv(name, wsDir, hostname); err == nil {
+					url = workspaceURLBlock(env, hostname, cfg, globalCfg)
+				}
+			}
 		}
 
-		rows = append(rows, []string{name, statusLabel(isRunning), url})
+		rows = append(rows, []string{name, status, url})
 	}
 	return rows
-}
-
-func serviceURLs(name, hostname string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) string {
-	wsDir, err := workspace.WorkspaceDir(name)
-	if err != nil {
-		return ""
-	}
-	env, err := compose.NewEnv(name, wsDir)
-	if err != nil {
-		return ""
-	}
-
-	var lines string
-
-	if vitePort, err := compose.Port(env, "vite", cfg.VitePort); err == nil && vitePort != "" {
-		lines += "\n" + dimStyle.Render("  ↳ vite: ") + globalCfg.ServiceURL("vite", hostname)
-	}
-
-	if _, err := compose.Port(env, "mailpit", 8025); err == nil {
-		lines += "\n" + dimStyle.Render("  ↳ mailpit: ") + globalCfg.ServiceURL("mailpit", hostname)
-	}
-
-	if mysqlPort, err := compose.Port(env, "mysql", 3306); err == nil && mysqlPort != "" {
-		lines += "\n" + dimStyle.Render("  ↳ mysql: ") + fmt.Sprintf("%s.test:%s", hostname, mysqlPort)
-	}
-
-	if pgPort, err := compose.Port(env, "postgres", 5432); err == nil && pgPort != "" {
-		lines += "\n" + dimStyle.Render("  ↳ postgres: ") + fmt.Sprintf("%s.test:%s", hostname, pgPort)
-	}
-
-	return lines
 }

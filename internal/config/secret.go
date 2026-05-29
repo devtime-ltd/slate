@@ -6,14 +6,17 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"regexp"
 	"strings"
 )
 
-func GenerateSecretKey() string {
+func GenerateSecretKey() (string, error) {
 	b := make([]byte, 32)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating secret key: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func DerivePassword(secretKey, project, workspace, salt string) string {
@@ -31,7 +34,11 @@ func EnsureSecretKey() (string, error) {
 	if cfg.SecretKey != "" {
 		return cfg.SecretKey, nil
 	}
-	cfg.SecretKey = GenerateSecretKey()
+	key, err := GenerateSecretKey()
+	if err != nil {
+		return "", err
+	}
+	cfg.SecretKey = key
 	if err := SaveGlobal(cfg); err != nil {
 		return "", err
 	}

@@ -17,9 +17,6 @@ func TestDefaultGlobal(t *testing.T) {
 	if !cfg.TLS {
 		t.Error("TLS should default to true")
 	}
-	if cfg.Proxy != "auto" {
-		t.Errorf("Proxy = %q, want %q", cfg.Proxy, "auto")
-	}
 }
 
 func TestLoadGlobalMissingFile(t *testing.T) {

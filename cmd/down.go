@@ -23,24 +23,31 @@ func init() {
 }
 
 func runDown(cmd *cobra.Command, args []string) error {
+	if err := requireDocker(); err != nil {
+		return err
+	}
 	name, wsDir, err := resolveNameOrCwd(args)
 	if err != nil {
 		return err
 	}
 
-	env, err := compose.NewEnv(name, wsDir)
+	hostname, err := resolveHostname(name)
 	if err != nil {
 		return err
 	}
 
-	hostname, _ := workspace.Hostname(name)
+	env, err := compose.NewEnv(name, wsDir, hostname)
+	if err != nil {
+		return err
+	}
+
 	fmt.Printf("Stopping %s...\n", hostname)
 	compose.Run(env, "down")
 
-	httpPort, httpsPort, tls := DetectProxyPorts()
-	proxyConfig := config.WithPorts(httpPort, httpsPort, tls)
-	proxy.Unregister(proxyConfig, hostname, []string{"vite", "mailpit"})
+	mainRoot, _ := workspace.MainRoot()
+	cfg, _ := config.LoadProject(mainRoot)
+	proxy.Unregister(hostname, scaffoldSubdomains(cfg))
 
-	fmt.Printf("✅ %s is down\n", hostname)
+	fmt.Printf("" + tick() + " %s is down\n", hostname)
 	return nil
 }

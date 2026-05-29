@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/devtime-ltd/slate/internal/config"
@@ -20,6 +21,14 @@ type Scaffold interface {
 	DefaultFiles() map[string]string                                             // host path -> container path
 	DefaultEnv(hostname string, globalCfg config.GlobalConfig) map[string]string // default .env.container vars
 	Tools() map[string]config.Tool                                               // exec + db tools
+	// Subdomains maps subdomain prefix -> compose service name + container port.
+	// Empty key "" is the main app at hostname.test; "vite" becomes vite.hostname.test, etc.
+	Subdomains() map[string]Subdomain
+}
+
+type Subdomain struct {
+	Service string
+	Port    int
 }
 
 var registry = map[string]Scaffold{}
@@ -106,7 +115,9 @@ func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffol
 
 	slateDir := filepath.Join(workspaceDir, ".slate")
 	filesDir := filepath.Join(slateDir, "files")
-	os.MkdirAll(filesDir, 0o755)
+	if err := os.MkdirAll(filesDir, 0o755); err != nil {
+		return fmt.Errorf("creating files dir: %w", err)
+	}
 
 	var mounts []string
 	i := 0
@@ -114,13 +125,14 @@ func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffol
 		expanded := expandHome(source)
 		data, err := os.ReadFile(expanded)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: skipping file mount %s -> %s (%v)\n", source, target, err)
 			continue
 		}
 
 		localName := fmt.Sprintf("file_%d", i)
 		localPath := filepath.Join(filesDir, localName)
 		if err := os.WriteFile(localPath, data, 0o644); err != nil {
-			continue
+			return fmt.Errorf("writing %s: %w", localPath, err)
 		}
 
 		mount := fmt.Sprintf("      - ./files/%s:%s:ro", localName, target)
@@ -210,8 +222,11 @@ func ComposeFilePath(workspaceDir string) string {
 func EnsureGitignore(projectDir string) error {
 	gi := filepath.Join(projectDir, ".gitignore")
 	data, _ := os.ReadFile(gi)
-	if strings.Contains(string(data), ".slate/") || strings.Contains(string(data), ".slate") {
-		return nil
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == ".slate" || trimmed == ".slate/" {
+			return nil
+		}
 	}
 
 	f, err := os.OpenFile(gi, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -249,9 +264,15 @@ func GenerateEnvContainer(workspaceDir, hostname, project, workspace string, cfg
 		defaults[k] = v
 	}
 
+	keys := make([]string, 0, len(defaults))
+	for k := range defaults {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
 	var b strings.Builder
-	for k, v := range defaults {
-		fmt.Fprintf(&b, "%s=%s\n", k, v)
+	for _, k := range keys {
+		fmt.Fprintf(&b, "%s=%s\n", k, defaults[k])
 	}
 
 	return os.WriteFile(filepath.Join(workspaceDir, ".env.container"), []byte(b.String()), 0o644)

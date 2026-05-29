@@ -24,18 +24,18 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	check := func(ok bool, label string) {
 		if ok {
-			fmt.Printf("  ✅ %s\n", label)
+			fmt.Printf("  " + tick() + " %s\n", label)
 		} else {
-			fmt.Printf("  ❌ %s\n", label)
+			fmt.Printf("  " + cross() + " %s\n", label)
 			allOK = false
 		}
 	}
 
-	warn := func(ok bool, label string) {
+	checkWarn := func(ok bool, label string) {
 		if ok {
-			fmt.Printf("  ✅ %s\n", label)
+			fmt.Printf("  "+tick()+" %s\n", label)
 		} else {
-			fmt.Printf("  ⚠️  %s\n", label)
+			fmt.Printf("  "+warn()+" %s\n", label)
 		}
 	}
 
@@ -59,11 +59,11 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		caddyAPIReady = true
 	}
 
-	if isSlateProxyRunning() {
-		fmt.Printf("  ✅ slate proxy (Caddy container, will be used)\n")
+	if isProxyRunning() {
+		fmt.Println("  " + tick() + " slate proxy (Caddy container, will be used)")
 		proxyFound = true
 	} else if caddyAPIReady {
-		fmt.Printf("  ✅ caddy (API reachable, will be used)\n")
+		fmt.Println("  " + tick() + " caddy (API reachable, will be used)")
 		proxyFound = true
 	}
 	if v := cmdVersion("herd", "--version"); v != "" {
@@ -74,7 +74,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 			label += " (will be used)"
 			proxyFound = true
 		}
-		fmt.Printf("  ✅ %s\n", label)
+		fmt.Printf("  " + tick() + " %s\n", label)
 	}
 	if !proxyFound {
 		check(false, "no HTTPS proxy. Run `slate proxy start` or install Caddy/Herd.")
@@ -89,9 +89,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	// tmux
 	if v := cmdVersion("tmux", "-V"); v != "" {
-		warn(true, fmt.Sprintf("tmux (%s)", v))
+		checkWarn(true, fmt.Sprintf("tmux (%s)", v))
 	} else {
-		warn(false, "tmux not found (needed for slate attach)")
+		checkWarn(false, "tmux not found (needed for slate attach)")
 	}
 
 	// DNS
@@ -107,7 +107,6 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	// Global config
 	cfg, _ := config.LoadGlobal()
 	fmt.Printf("\n  HTTPS port: %d\n", cfg.HTTPSPort)
-	fmt.Printf("  Proxy preference: %s\n", cfg.Proxy)
 
 	fmt.Println()
 	if allOK {
@@ -116,11 +115,6 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		fmt.Println("Some checks failed.")
 	}
 	return nil
-}
-
-func isSlateProxyRunning() bool {
-	out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", "slate-proxy").Output()
-	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
 func cmdVersion(name string, args ...string) string {

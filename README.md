@@ -21,22 +21,32 @@ Open `https://your-project--my-feature.test` and start developing.
 
 ```
 Workspace lifecycle:
-  slate new <name>       Create a new workspace (containers + HTTPS)
-  slate up [name]        Start/refresh a workspace
-  slate down [name]      Stop (preserves data)
-  slate rm <name>        Destroy everything
-  slate ls               List workspaces
-
-Development (available commands depend on your scaffold):
-  slate composer <args>  slate artisan <args>   slate npm <args>
-  slate pint <args>      slate pest <args>      slate tinker
-  slate shell [name]     slate logs [service]
+  slate new <name>          Create a new workspace (containers + HTTPS)
+  slate up [name]           Start/refresh a workspace (offers to create if missing)
+  slate down [name]         Stop (preserves data)
+  slate restart <name>      Restart workspace or single service
+  slate rm <name>           Destroy workspace (containers, volumes, worktree)
+  slate ls [--all]          List workspaces (current project or all registered)
 
 Tools:
-  slate setup            One-time host setup (proxy + CA cert)
-  slate doctor           Check dependencies
-  slate tableplus [name] Open TablePlus to workspace DB
+  slate setup               One-time host setup (proxy + CA cert + secret key)
+  slate teardown            Remove all slate infrastructure
+  slate doctor              Check dependencies
+  slate open <name>         Open workspace URL in browser
+  slate shell <name>        Bash shell in app container
+  slate logs <name> [svc]   Tail logs (default: all services)
+  slate proxy               Manage the HTTPS proxy
+
+Scaffold tools (from slate.yml):
+  Available commands depend on your scaffold. For Laravel:
+  slate composer <args>     slate artisan <args>     slate tinker
+  slate pint <args>         slate pest <args>
+  slate npm <args>          slate npx <args>
+  slate mysql <workspace>   Print DB connection info (--open, --url)
 ```
+
+Add `--project <name>` to any command to target a project other than the
+current directory's. The project name comes from the registry (`slate ls --all`).
 
 ## How It Works
 
@@ -53,7 +63,7 @@ Host                          Containers (per workspace)
                               └──────────────────────────┘
 ```
 
-Source code is bind-mounted from the host. Package installs (`composer install`, `npm install`) run inside containers so compromised dependencies can't access your SSH keys, cloud credentials, or browser password stores.
+Source code is bind-mounted from the host. Package installs (`composer install`, `npm install`) run inside containers so compromised dependencies can't access your SSH keys, cloud credentials, or browser password stores. Dependency caches live inside each workspace at `.slate/composer/` and `.slate/npm-cache/`.
 
 ## Project Config
 
@@ -70,6 +80,9 @@ That's it for most projects. The scaffold provides sensible defaults for the Doc
 ```yaml
 scaffold: laravel
 
+# Optional: override the auto-derived project name (from directory basename)
+project: my-project
+
 # Extra packages for the Docker image
 apt_packages: [ghostscript, imagemagick, libmagickwand-dev]
 php_extensions: [imagick]
@@ -79,19 +92,30 @@ up: |
   composer config http-basic.nova.laravel.com "$NOVA_USER" "$NOVA_KEY"
   {{SCAFFOLD_DEFAULT}}
 
-# Extra env vars for workspaces
+# Extra env vars for workspaces (supports placeholders)
 env:
   CUSTOM_VAR: value
+  ANALYTICS_DB: "{{DB_NAME:analytics}}"
+  REDIS_PASSWORD: "{{GEN_PASSWORD:redis}}"
+
+# Mount host files into containers (e.g. for auth)
+files:
+  ~/.npmrc: /home/node/.npmrc
 ```
 
 Lifecycle hooks:
 - **`up`**: runs on every `slate new` and `slate up` (default: install deps + migrate)
-- **`new`**: runs on `slate new` only, before `up` (default: fresh DB seed)
+- **`new`**: runs on `slate new` only, after `up` (default: fresh DB seed)
 - Use `{{SCAFFOLD_DEFAULT}}` to inject the scaffold's defaults at any point in your override
+
+Placeholders (expanded at workspace creation):
+- `{{SCAFFOLD_DEFAULT}}` — scaffold's default script (lifecycle hooks only)
+- `{{GEN_PASSWORD:salt}}` — derived per-workspace password from your installation's secret key
+- `{{DB_NAME:label}}` — safe database name (`workspace_label_hash`, max 44 chars)
 
 ### Custom tools
 
-Scaffolds register tool commands automatically (e.g. Laravel provides `composer`, `artisan`, `pint`, `pest`). Override or add your own:
+Scaffolds register tool commands automatically (e.g. Laravel provides `composer`, `artisan`, `pint`, `pest`, `mysql`). Override or add your own:
 
 ```yaml
 tools:
@@ -99,6 +123,8 @@ tools:
     service: app
     command: [php, my-script.php]
 ```
+
+User-defined tools in `slate.yml` are always exec tools (run a command in a container). Scaffolds can also define DB tools (e.g. `mysql`, `psql`) that output connection info.
 
 ## Scaffolds
 
@@ -113,11 +139,13 @@ tools:
 `~/.config/slate/config.yml` (all optional):
 
 ```yaml
-http_port: 80       # default: auto-detect available port
-https_port: 443     # default: auto-detect available port
-tls: true           # false for HTTP-only (no certs needed)
-proxy: auto          # auto | caddy
+http_port: 80           # default: 80
+https_port: 443         # default: 443
+tls: true               # false for HTTP-only (no certs needed)
+secret_key: <generated> # auto-generated on first `slate setup`
 ```
+
+The registered projects index lives at `~/.config/slate/projects` (one `name=path` entry per line, names assigned at registration and stable across removals).
 
 ## Requirements
 

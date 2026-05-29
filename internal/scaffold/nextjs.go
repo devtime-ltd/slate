@@ -23,7 +23,6 @@ func (s *nextjsScaffold) FileMap(slateDir string) map[string]string {
 		"compose.yaml.tmpl": filepath.Join(slateDir, "compose.yaml"),
 		"Dockerfile.tmpl":   filepath.Join(slateDir, "Dockerfile"),
 		"dockerignore.tmpl": filepath.Join(slateDir, ".dockerignore"),
-		"slate.yml.tmpl":    "",
 	}
 }
 
@@ -38,6 +37,13 @@ func (s *nextjsScaffold) DefaultEnv(hostname string, globalCfg config.GlobalConf
 
 func (s *nextjsScaffold) DefaultFiles() map[string]string {
 	return nil
+}
+
+func (s *nextjsScaffold) Subdomains() map[string]Subdomain {
+	return map[string]Subdomain{
+		"":        {Service: "app", Port: 3000},
+		"mailpit": {Service: "mailpit", Port: 8025},
+	}
 }
 
 func (s *nextjsScaffold) Tools() map[string]config.Tool {

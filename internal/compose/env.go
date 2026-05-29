@@ -1,13 +1,21 @@
 package compose
 
-import "github.com/devtime-ltd/slate/internal/workspace"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
 
-func NewEnv(name, wsDir string) (Env, error) {
-	mainRoot, err := workspace.MainRoot()
-	if err != nil {
-		return Env{}, err
+	"github.com/devtime-ltd/slate/internal/config"
+	"github.com/devtime-ltd/slate/internal/workspace"
+)
+
+func NewEnv(name, wsDir, hostname string) (Env, error) {
+	entrypoint := filepath.Join(config.DataDir(), "entrypoint.sh")
+	if _, err := os.Stat(entrypoint); err != nil {
+		return Env{}, fmt.Errorf("slate entrypoint missing. Run `slate setup` first")
 	}
-	hostname, err := workspace.Hostname(name)
+
+	mainRoot, err := workspace.MainRoot()
 	if err != nil {
 		return Env{}, err
 	}

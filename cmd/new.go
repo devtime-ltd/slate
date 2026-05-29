@@ -4,16 +4,18 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/devtime-ltd/slate/internal/compose"
 	"github.com/devtime-ltd/slate/internal/config"
-	"github.com/devtime-ltd/slate/internal/proxy"
 	"github.com/devtime-ltd/slate/internal/scaffold"
 	"github.com/devtime-ltd/slate/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
 var newBranch string
+var newBg bool
+var newCd bool
 
 var newCmd = &cobra.Command{
 	Use:   "new <name>",
@@ -25,17 +27,24 @@ var newCmd = &cobra.Command{
 
 func init() {
 	newCmd.Flags().StringVarP(&newBranch, "branch", "b", "", "Git branch name (default: slate/<name>)")
+	newCmd.Flags().BoolVar(&newBg, "bg", false, "Run container build + lifecycle in the background")
+	newCmd.Flags().BoolVar(&newCd, "cd", false, "Spawn a shell in the workspace directory (with --bg: immediately; without: after provisioning finishes)")
 	newCmd.GroupID = "workspace"
 	rootCmd.AddCommand(newCmd)
 }
 
 func runNew(cmd *cobra.Command, args []string) error {
-	name := args[0]
+	return createWorkspace(args[0], newBranch, newBg, newCd)
+}
+
+func createWorkspace(name, branch string, bg, cd bool) error {
+	if err := requireDocker(); err != nil {
+		return err
+	}
 	if err := workspace.ValidateName(name); err != nil {
 		return err
 	}
 
-	branch := newBranch
 	if branch == "" {
 		branch = "slate/" + name
 	}
@@ -46,6 +55,10 @@ func runNew(cmd *cobra.Command, args []string) error {
 	}
 
 	config.RegisterProject(mainRoot)
+
+	if _, err := os.Stat(filepath.Join(mainRoot, "slate.yml")); err != nil {
+		return fmt.Errorf("no slate.yml in this project. Run `slate init <scaffold>` first (e.g. `slate init laravel`)")
+	}
 
 	cfg, err := config.LoadProject(mainRoot)
 	if err != nil {
@@ -61,8 +74,13 @@ func runNew(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("workspace '%s' already exists at %s", name, wsDir)
 	}
 
-	wsRoot, _ := workspace.WorkspacesRoot()
-	os.MkdirAll(wsRoot, 0o755)
+	wsRoot, err := workspace.WorkspacesRoot()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(wsRoot, 0o755); err != nil {
+		return fmt.Errorf("creating workspaces dir: %w", err)
+	}
 
 	fmt.Printf("Creating worktree (branch: %s)...\n", branch)
 	if err := workspace.CreateWorktree(wsDir, branch); err != nil {
@@ -75,54 +93,44 @@ func runNew(cmd *cobra.Command, args []string) error {
 	}
 	hostname := workspace.HostnameForProject(projectName, name)
 
-	secretKey, _ := config.EnsureSecretKey()
-	httpPort, httpsPort, tls := DetectProxyPorts()
-	proxyConfig := config.WithPorts(httpPort, httpsPort, tls)
-	proxyConfig.SecretKey = secretKey
+	proxyConfig, err := loadProxyConfig(true)
+	if err != nil {
+		return err
+	}
 
 	fmt.Println("Generating .slate/ and .env.container...")
 	if err := scaffold.Generate(wsDir, cfg); err != nil {
 		return fmt.Errorf("generating scaffold: %w", err)
 	}
 	if s, err := scaffold.Get(cfg.Scaffold); err == nil {
-		scaffold.GenerateFileMounts(wsDir, cfg, s)
+		if err := scaffold.GenerateFileMounts(wsDir, cfg, s); err != nil {
+			return fmt.Errorf("generating file mounts: %w", err)
+		}
 	}
 	if err := scaffold.GenerateEnvContainer(wsDir, hostname, projectName, name, cfg, proxyConfig); err != nil {
 		return fmt.Errorf("generating .env.container: %w", err)
 	}
-	scaffold.EnsureGitignore(mainRoot)
+	if err := scaffold.EnsureGitignore(mainRoot); err != nil {
+		fmt.Printf("  warning: could not update .gitignore: %v\n", err)
+	}
 
-	env, err := compose.NewEnv(name, wsDir)
+	opts := provisionOpts{fresh: true, build: true}
+
+	if bg {
+		return runBackgroundProvision(name, wsDir, opts, cd)
+	}
+
+	env, err := compose.NewEnv(name, wsDir, hostname)
 	if err != nil {
 		return err
 	}
-
-	fmt.Println("Building and starting containers...")
-	if err := compose.Run(env, "up", "-d", "--build"); err != nil {
-		return fmt.Errorf("compose up failed: %w", err)
+	if err := runWorkspaceLifecycle(env, name, wsDir, hostname, cfg, proxyConfig, opts); err != nil {
+		return err
 	}
 
-	lifecycleScript := scaffold.BuildLifecycleScript(cfg, true)
-	if lifecycleScript != "" {
-		fmt.Println("Running lifecycle (up + new)...")
-		if err := compose.Exec(env, "app", "sh", "-c", lifecycleScript); err != nil {
-			return fmt.Errorf("lifecycle failed: %w", err)
-		}
+	if cd {
+		return cdIntoWorkspace(wsDir)
 	}
-
-	compose.Run(env, "restart", "queue")
-
-	services := buildServicePorts(env, cfg)
-
-	if err := proxy.Register(proxyConfig, hostname, services); err != nil {
-		return fmt.Errorf("proxy registration failed: %w", err)
-	}
-
-	fmt.Printf("\n✅ Workspace ready: %s\n", proxyConfig.WorkspaceURL(hostname))
-	if services["vite"] != "" {
-		fmt.Printf("   Vite HMR: %s\n", proxyConfig.ServiceURL("vite", hostname))
-	}
-
 	return nil
 }
 
