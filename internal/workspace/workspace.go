@@ -137,6 +137,11 @@ func RemoveWorktree(dir string) error {
 
 func runGit(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
+	// When --project targets a project the user isn't currently sitting in,
+	// run git against that project's checkout instead of the CWD.
+	if mainRootOverride != "" {
+		cmd.Dir = mainRootOverride
+	}
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
