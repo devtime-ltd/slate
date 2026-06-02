@@ -12,10 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	pathCd   bool
-	pathOpen bool
-)
+var pathOpen bool
 
 var pathCmd = &cobra.Command{
 	Use:     "path <workspace>",
@@ -31,17 +28,6 @@ var pathCmd = &cobra.Command{
 			return fmt.Errorf("workspace '%s' not found", args[0])
 		}
 
-		if pathCd {
-			shell := os.Getenv("SHELL")
-			if shell == "" {
-				shell = "/bin/sh"
-			}
-			c := hostCommand(shell)
-			c.Dir = wsDir
-			c.Stdin = os.Stdin
-			return c.Run()
-		}
-
 		if pathOpen {
 			opener := "xdg-open"
 			if runtime.GOOS == "darwin" {
@@ -52,6 +38,24 @@ var pathCmd = &cobra.Command{
 
 		fmt.Println(wsDir)
 		return nil
+	},
+}
+
+var cdCmd = &cobra.Command{
+	Use:     "cd <workspace>",
+	Short:   "Spawn a sub-shell rooted at the workspace directory",
+	Long:    "Spawns $SHELL with cwd set to the workspace dir. Type `exit` to return to the original shell.\nWorks across projects via --project. A shell builtin cd cannot change the parent shell's cwd; wrap this in a shell function if you want that behaviour.",
+	Args:    requireWorkspaceName,
+	GroupID: "tools",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wsDir, err := workspace.WorkspaceDir(args[0])
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(wsDir); err != nil {
+			return fmt.Errorf("workspace '%s' not found", args[0])
+		}
+		return cdIntoWorkspace(wsDir)
 	},
 }
 
@@ -126,8 +130,8 @@ func promptForEditor() (string, error) {
 }
 
 func init() {
-	pathCmd.Flags().BoolVar(&pathCd, "cd", false, "Spawn a shell in the workspace directory")
 	pathCmd.Flags().BoolVar(&pathOpen, "open", false, "Open workspace directory in file manager")
 	rootCmd.AddCommand(pathCmd)
 	rootCmd.AddCommand(codeCmd)
+	rootCmd.AddCommand(cdCmd)
 }

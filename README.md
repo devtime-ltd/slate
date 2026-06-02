@@ -33,7 +33,8 @@ Tools:
   slate teardown            Remove all slate infrastructure
   slate doctor              Check dependencies
   slate open <name>         Open workspace URL in browser
-  slate path <name>         Print workspace path (--cd, --open)
+  slate path <name>         Print workspace path (pipeable, --open)
+  slate cd <name>           Spawn a sub-shell rooted at the workspace dir
   slate code <name>         Open workspace in your editor
   slate shell <name>        Bash shell in app container
   slate logs <name> [svc]   Tail logs (default: all services)
