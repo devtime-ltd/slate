@@ -15,17 +15,21 @@ import (
 var pathOpen bool
 
 var pathCmd = &cobra.Command{
-	Use:     "path <workspace>",
+	Use:     "path [workspace]",
 	Short:   "Print workspace path (pipeable)",
 	Args:    requireWorkspaceName,
 	GroupID: "tools",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		wsDir, err := workspace.WorkspaceDir(args[0])
+		name, err := resolveWorkspaceArg(args)
+		if err != nil {
+			return err
+		}
+		wsDir, err := workspace.WorkspaceDir(name)
 		if err != nil {
 			return err
 		}
 		if _, err := os.Stat(wsDir); err != nil {
-			return fmt.Errorf("workspace '%s' not found", args[0])
+			return fmt.Errorf("workspace '%s' not found", name)
 		}
 
 		if pathOpen {
@@ -42,35 +46,43 @@ var pathCmd = &cobra.Command{
 }
 
 var cdCmd = &cobra.Command{
-	Use:     "cd <workspace>",
+	Use:     "cd [workspace]",
 	Short:   "Spawn a sub-shell rooted at the workspace directory",
 	Long:    "Spawns $SHELL with cwd set to the workspace dir. Type `exit` to return to the original shell.\nWorks across projects via --project. A shell builtin cd cannot change the parent shell's cwd; wrap this in a shell function if you want that behaviour.",
 	Args:    requireWorkspaceName,
 	GroupID: "tools",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		wsDir, err := workspace.WorkspaceDir(args[0])
+		name, err := resolveWorkspaceArg(args)
+		if err != nil {
+			return err
+		}
+		wsDir, err := workspace.WorkspaceDir(name)
 		if err != nil {
 			return err
 		}
 		if _, err := os.Stat(wsDir); err != nil {
-			return fmt.Errorf("workspace '%s' not found", args[0])
+			return fmt.Errorf("workspace '%s' not found", name)
 		}
 		return cdIntoWorkspace(wsDir)
 	},
 }
 
 var codeCmd = &cobra.Command{
-	Use:     "code <workspace>",
+	Use:     "code [workspace]",
 	Short:   "Open workspace in your editor",
 	Args:    requireWorkspaceName,
 	GroupID: "tools",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		wsDir, err := workspace.WorkspaceDir(args[0])
+		name, err := resolveWorkspaceArg(args)
+		if err != nil {
+			return err
+		}
+		wsDir, err := workspace.WorkspaceDir(name)
 		if err != nil {
 			return err
 		}
 		if _, err := os.Stat(wsDir); err != nil {
-			return fmt.Errorf("workspace '%s' not found", args[0])
+			return fmt.Errorf("workspace '%s' not found", name)
 		}
 
 		editor, err := resolveEditor()

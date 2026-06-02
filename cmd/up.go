@@ -128,5 +128,17 @@ func resolveNameOrCwd(args []string) (string, string, error) {
 		}
 		return name, dir, nil
 	}
-	return workspace.ResolveFromCwd()
+	if name, dir, err := workspace.ResolveFromCwd(); err == nil {
+		return name, dir, nil
+	}
+	// CWD isn't a workspace; prompt the user to pick from the project.
+	name, err := pickWorkspace()
+	if err != nil {
+		return "", "", err
+	}
+	dir, err := workspace.WorkspaceDir(name)
+	if err != nil {
+		return "", "", err
+	}
+	return name, dir, nil
 }

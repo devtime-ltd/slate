@@ -7,7 +7,7 @@ import (
 )
 
 var openCmd = &cobra.Command{
-	Use:     "open <workspace>",
+	Use:     "open [workspace]",
 	Short:   "Open workspace URL in browser",
 	Args:    requireWorkspaceName,
 	GroupID: "tools",

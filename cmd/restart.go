@@ -11,13 +11,13 @@ import (
 )
 
 var restartCmd = &cobra.Command{
-	Use:   "restart <workspace> [service]",
+	Use:   "restart [workspace] [service]",
 	Short: "Restart a workspace or a single service",
 	Long: `Restarts all services in a workspace, or a single service if specified.
 Re-registers the HTTPS proxy in case ports changed.
 
 Service names depend on the scaffold (e.g. app, queue, mysql, vite, mailpit).`,
-	Args:    cobra.RangeArgs(1, 2),
+	Args:    cobra.MaximumNArgs(2),
 	GroupID: "workspace",
 	RunE:    runRestart,
 }
@@ -30,7 +30,10 @@ func runRestart(cmd *cobra.Command, args []string) error {
 	if err := requireDocker(); err != nil {
 		return err
 	}
-	name := args[0]
+	name, err := resolveWorkspaceArg(args)
+	if err != nil {
+		return err
+	}
 	if err := workspace.ValidateName(name); err != nil {
 		return err
 	}

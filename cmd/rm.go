@@ -16,9 +16,9 @@ import (
 var rmForce bool
 
 var rmCmd = &cobra.Command{
-	Use:   "rm <name>",
+	Use:   "rm [name]",
 	Short: "Destroy workspace (containers, volumes, worktree)",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.MaximumNArgs(1),
 	RunE:  runRm,
 }
 
@@ -32,7 +32,10 @@ func runRm(cmd *cobra.Command, args []string) error {
 	if err := requireDocker(); err != nil {
 		return err
 	}
-	name := args[0]
+	name, err := resolveWorkspaceArg(args)
+	if err != nil {
+		return err
+	}
 	if err := workspace.ValidateName(name); err != nil {
 		return err
 	}

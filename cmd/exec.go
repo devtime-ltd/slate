@@ -16,7 +16,7 @@ import (
 var shellCmd = &cobra.Command{
 	Use:   "shell [name]",
 	Short: "Bash shell in the app container",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, wsDir, err := resolveNameOrCwd(args)
 		if err != nil {
@@ -72,12 +72,12 @@ var logsCmd = &cobra.Command{
 }
 
 
+// requireWorkspaceName now accepts 0 or 1 workspace names. When 0 are passed,
+// commands using this validator call resolveWorkspaceArg(args) to prompt
+// the user with a picker over the project's workspaces.
 var requireWorkspaceName cobra.PositionalArgs = func(cmd *cobra.Command, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("workspace name required: slate %s <workspace>", cmd.Name())
-	}
 	if len(args) > 1 {
-		return fmt.Errorf("too many arguments: slate %s <workspace>", cmd.Name())
+		return fmt.Errorf("too many arguments: slate %s [workspace]", cmd.Name())
 	}
 	return nil
 }
@@ -140,7 +140,7 @@ func registerExecCommand(name string, t config.ExecTool) {
 
 func registerDBCommand(name string, t config.DBTool) {
 	dbCmd := &cobra.Command{
-		Use:     name + " <workspace>",
+		Use:     name + " [workspace]",
 		Short:   "Connection info for " + t.Scheme + " database",
 		GroupID: "scaffold",
 		Args:    requireWorkspaceName,
