@@ -28,13 +28,13 @@ var newCmd = &cobra.Command{
 func init() {
 	newCmd.Flags().StringVarP(&newBranch, "branch", "b", "", "Git branch name (default: slate/<name>)")
 	newCmd.Flags().BoolVar(&newBg, "bg", false, "Run container build + lifecycle in the background")
-	newCmd.Flags().BoolVar(&newCd, "cd", false, "Spawn a shell in the workspace directory (with --bg: immediately; without: after provisioning finishes)")
+	newCmd.Flags().BoolVar(&newCd, "cd", false, "Spawn a shell in the workspace directory (default from global auto_cd; pass --cd=false to opt out)")
 	newCmd.GroupID = "workspace"
 	rootCmd.AddCommand(newCmd)
 }
 
 func runNew(cmd *cobra.Command, args []string) error {
-	return createWorkspace(args[0], newBranch, newBg, newCd)
+	return createWorkspace(args[0], newBranch, newBg, resolveAutoCd(cmd, "cd", newCd))
 }
 
 func createWorkspace(name, branch string, bg, cd bool) error {

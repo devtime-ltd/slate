@@ -30,7 +30,7 @@ func init() {
 	upCmd.Flags().BoolVar(&upBuild, "build", false, "Force image rebuild")
 	upCmd.Flags().BoolVar(&upFresh, "fresh", false, "Recreate containers + volumes (worktree code preserved)")
 	upCmd.Flags().BoolVar(&upBg, "bg", false, "Run container build + lifecycle in the background")
-	upCmd.Flags().BoolVar(&upCd, "cd", false, "Spawn a shell in the workspace directory (with --bg: immediately; without: after provisioning finishes)")
+	upCmd.Flags().BoolVar(&upCd, "cd", false, "Spawn a shell in the workspace directory (default from global auto_cd; pass --cd=false to opt out)")
 	upCmd.GroupID = "workspace"
 	rootCmd.AddCommand(upCmd)
 }
@@ -39,6 +39,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	if err := requireDocker(); err != nil {
 		return err
 	}
+	cd := resolveAutoCd(cmd, "cd", upCd)
 	name, wsDir, err := resolveNameOrCwd(args)
 	if err == nil {
 		if err := checkNotProvisioning(wsDir); err != nil {
@@ -53,7 +54,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
 			if answer == "" || answer == "y" {
-				return createWorkspace(args[0], "", upBg, upCd)
+				return createWorkspace(args[0], "", upBg, cd)
 			}
 			return fmt.Errorf("workspace '%s' not found", args[0])
 		}
@@ -95,7 +96,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	opts := provisionOpts{fresh: upFresh, build: upBuild, wipe: upFresh}
 
 	if upBg {
-		return runBackgroundProvision(name, wsDir, opts, upCd)
+		return runBackgroundProvision(name, wsDir, opts, cd)
 	}
 
 	env, err := compose.NewEnv(name, wsDir, hostname)
@@ -106,7 +107,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if upCd {
+	if cd {
 		return cdIntoWorkspace(wsDir)
 	}
 	return nil

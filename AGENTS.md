@@ -38,10 +38,10 @@ slate (Go binary)
 - Per-workspace state derived from git, Docker, and the Caddy API at runtime (no extra state files).
 
 **State files** (all under `~/.config/slate/` and `~/.local/share/slate/`):
-- `~/.config/slate/config.yml` — global config (ports, TLS, secret key, editor)
-- `~/.config/slate/projects` — project registry (one `name=path` line per project)
-- `~/.local/share/slate/entrypoint.sh` — bind-mounted into containers
-- `~/.local/share/slate/slate-ca.crt` — extracted Caddy CA after `slate proxy trust`
+- `~/.config/slate/config.yml`: global config (ports, TLS, secret key, editor, auto_cd)
+- `~/.config/slate/projects`: project registry (one `name=path` line per project)
+- `~/.local/share/slate/entrypoint.sh`: bind-mounted into containers
+- `~/.local/share/slate/slate-ca.crt`: extracted Caddy CA after `slate proxy trust`
 
 ## Background provisioning (`--bg`)
 
@@ -50,7 +50,7 @@ slate (Go binary)
 2. Runs the slow phase (optional `compose down -v`, `compose up`, lifecycle script, queue restart, proxy register).
 3. On success removes the lock; on error renames it to `.slate/provisioning.failed`.
 
-`slate ls` consults the lockfile (PID liveness via `signal(0)` — Unix-only) to render yellow "provisioning" or red "failed". `slate up`/`restart` refuse while a live lock exists; `slate rm` SIGTERMs the lock pid as the escape hatch.
+`slate ls` consults the lockfile (PID liveness via `signal(0)`, Unix-only) to render yellow "provisioning" or red "failed". `slate up`/`restart` refuse while a live lock exists; `slate rm` SIGTERMs the lock pid as the escape hatch.
 
 The foreground `runWorkspaceLifecycle` writes the same lock, so concurrent `slate ls` calls see in-flight foreground runs too.
 
@@ -58,8 +58,8 @@ The foreground `runWorkspaceLifecycle` writes the same lock, so concurrent `slat
 
 The Scaffold interface exposes a `Tools() map[string]config.Tool` method. `Tool` is an interface with two concrete implementations:
 
-- **`ExecTool{Service, Command}`** — runs a command inside a container (composer, artisan, npm, etc.)
-- **`DBTool{Service, Port, Scheme, User, PasswordSalt}`** — generates a DB connection URL (mysql, psql, etc.) with `--open` and `--url` flags
+- **`ExecTool{Service, Command}`**: runs a command inside a container (composer, artisan, npm, etc.)
+- **`DBTool{Service, Port, Scheme, User, PasswordSalt}`**: generates a DB connection URL (mysql, psql, etc.) with `--open` and `--url` flags
 
 User-defined tools in `slate.yml` are always exec tools. Scaffolds can mix both.
 
@@ -70,7 +70,7 @@ Implemented commands match the README. Notable status beyond what the README cov
 - `--bg` background provisioning, `--cd` shell spawn, mutual exclusion guards, and failed-state surfacing in `ls` all landed.
 - `--project <name>` works from anywhere on disk (including outside any git repo).
 - No end-to-end CI tests against Docker yet.
-- The `attach` command (TUI log viewer) is not yet implemented — see Roadmap.
+- The `attach` command (TUI log viewer) is not yet implemented; see Roadmap.
 
 ## Roadmap
 

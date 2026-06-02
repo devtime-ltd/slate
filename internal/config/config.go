@@ -13,6 +13,10 @@ type GlobalConfig struct {
 	TLS       bool   `yaml:"tls"`
 	SecretKey string `yaml:"secret_key"`
 	Editor    string `yaml:"editor"`
+	// AutoCd controls whether `slate new` and `slate up` drop into a shell
+	// at the workspace dir after provisioning. Override per-invocation with
+	// --cd or --cd=false.
+	AutoCd bool `yaml:"auto_cd"`
 }
 
 // Tool is implemented by ExecTool and DBTool. The marker method keeps the
@@ -94,6 +98,7 @@ func DefaultGlobal() GlobalConfig {
 		HTTPPort:  80,
 		HTTPSPort: 443,
 		TLS:       true,
+		AutoCd:    true,
 	}
 }
 
@@ -177,6 +182,7 @@ func LoadGlobal() (GlobalConfig, error) {
 		TLS       *bool   `yaml:"tls"`
 		SecretKey *string `yaml:"secret_key"`
 		Editor    *string `yaml:"editor"`
+		AutoCd    *bool   `yaml:"auto_cd"`
 	}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return cfg, err
@@ -195,6 +201,9 @@ func LoadGlobal() (GlobalConfig, error) {
 	}
 	if raw.Editor != nil {
 		cfg.Editor = *raw.Editor
+	}
+	if raw.AutoCd != nil {
+		cfg.AutoCd = *raw.AutoCd
 	}
 	return cfg, nil
 }

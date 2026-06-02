@@ -12,7 +12,18 @@ import (
 	"github.com/devtime-ltd/slate/internal/config"
 	"github.com/devtime-ltd/slate/internal/proxy"
 	"github.com/devtime-ltd/slate/internal/scaffold"
+	"github.com/spf13/cobra"
 )
+
+// resolveAutoCd returns the explicit flag value if the user passed --cd /
+// --cd=false, or the global config's auto_cd default otherwise.
+func resolveAutoCd(cmd *cobra.Command, flagName string, flagVal bool) bool {
+	if cmd.Flags().Changed(flagName) {
+		return flagVal
+	}
+	cfg, _ := config.LoadGlobal()
+	return cfg.AutoCd
+}
 
 // provisionOpts captures the variations between fresh-workspace creation,
 // idempotent up, and the bg worker re-invocation.
