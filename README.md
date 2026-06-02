@@ -33,6 +33,8 @@ Tools:
   slate teardown            Remove all slate infrastructure
   slate doctor              Check dependencies
   slate open <name>         Open workspace URL in browser
+  slate path <name>         Print workspace path (--cd, --open)
+  slate code <name>         Open workspace in your editor
   slate shell <name>        Bash shell in app container
   slate logs <name> [svc]   Tail logs (default: all services)
   slate proxy               Manage the HTTPS proxy
@@ -47,6 +49,14 @@ Scaffold tools (from slate.yml):
 
 Add `--project <name>` to any command to target a project other than the
 current directory's. The project name comes from the registry (`slate ls --all`).
+
+### Useful flags
+
+- `slate new <name> -b <branch>` — custom branch name (default: `slate/<name>`).
+- `slate new <name> --bg` — fork the slow phase (build + lifecycle) to the background; the fast phase (worktree + scaffold) runs inline so editing can start immediately. Background log: `.slate/workspaces/<name>/.slate/provision.log`.
+- `slate new <name> --cd` — spawn `$SHELL` rooted at the new workspace when ready. With `--bg` that's immediate; without, after provisioning finishes.
+- `slate up [name] --fresh` — recreate containers + volumes (worktree code preserved) and run the new-workspace lifecycle.
+- `slate up [name] --build` — force image rebuild.
 
 ## How It Works
 
@@ -124,7 +134,7 @@ tools:
     command: [php, my-script.php]
 ```
 
-User-defined tools in `slate.yml` are always exec tools (run a command in a container). Scaffolds can also define DB tools (e.g. `mysql`, `psql`) that output connection info.
+User-defined tools in `slate.yml` are always exec tools (run a command in a container).
 
 ## Scaffolds
 
@@ -143,6 +153,7 @@ http_port: 80           # default: 80
 https_port: 443         # default: 443
 tls: true               # false for HTTP-only (no certs needed)
 secret_key: <generated> # auto-generated on first `slate setup`
+editor: code            # default editor for `slate code` (prompted on first use)
 ```
 
 The registered projects index lives at `~/.config/slate/projects` (one `name=path` entry per line, names assigned at registration and stable across removals).
