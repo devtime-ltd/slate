@@ -129,7 +129,7 @@ func createWorkspace(name, branch string, bg, cd bool) error {
 	}
 
 	if cd {
-		return cdIntoWorkspace(wsDir)
+		return spawnShellAt(wsDir)
 	}
 	return nil
 }
