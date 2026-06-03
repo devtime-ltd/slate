@@ -255,7 +255,10 @@ func TestNextjsDefaultEnv(t *testing.T) {
 }
 
 func TestLaravelDockerfileBakesPHPDefaults(t *testing.T) {
-	s, _ := Get("laravel")
+	s, err := Get("laravel")
+	if err != nil {
+		t.Fatalf("Get(laravel) failed: %v", err)
+	}
 	out, err := s.RenderDockerfile("WORKDIR /app\nUSER www-data\n", config.ProjectConfig{Scaffold: "laravel"})
 	if err != nil {
 		t.Fatal(err)
@@ -263,13 +266,16 @@ func TestLaravelDockerfileBakesPHPDefaults(t *testing.T) {
 	if !strings.Contains(out, "/usr/local/etc/php/conf.d/10-slate-defaults.ini") {
 		t.Errorf("default php.ini drop-in missing from Dockerfile:\n%s", out)
 	}
-	if !strings.Contains(out, "memory_limit = 512M") {
+	if !strings.Contains(out, "'memory_limit' '512M'") {
 		t.Errorf("default memory_limit not set:\n%s", out)
 	}
 }
 
 func TestLaravelDockerfilePHPIniOverride(t *testing.T) {
-	s, _ := Get("laravel")
+	s, err := Get("laravel")
+	if err != nil {
+		t.Fatalf("Get(laravel) failed: %v", err)
+	}
 	cfg := config.ProjectConfig{
 		Scaffold: "laravel",
 		Extra: map[string]any{
@@ -286,21 +292,36 @@ func TestLaravelDockerfilePHPIniOverride(t *testing.T) {
 	if !strings.Contains(out, "/usr/local/etc/php/conf.d/50-slate-yml.ini") {
 		t.Errorf("user php.ini drop-in missing:\n%s", out)
 	}
-	if !strings.Contains(out, "memory_limit = 2G") {
+	if !strings.Contains(out, "'memory_limit' '2G'") {
 		t.Errorf("user memory_limit override missing:\n%s", out)
 	}
-	if !strings.Contains(out, "max_execution_time = 0") {
+	if !strings.Contains(out, "'max_execution_time' '0'") {
 		t.Errorf("unquoted int php_ini value should be stringified:\n%s", out)
 	}
 }
 
 func TestLaravelDockerfileDoesNotImposeMaxExecutionTime(t *testing.T) {
-	s, _ := Get("laravel")
+	s, err := Get("laravel")
+	if err != nil {
+		t.Fatalf("Get(laravel) failed: %v", err)
+	}
 	out, err := s.RenderDockerfile("WORKDIR /app\n", config.ProjectConfig{Scaffold: "laravel"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out, "max_execution_time") {
 		t.Errorf("default ini should not set max_execution_time (let PHP CLI default of 0 apply):\n%s", out)
+	}
+}
+
+func TestRenderPHPIniDropEscapesMaliciousKey(t *testing.T) {
+	out := renderPHPIniDrop("test.ini", map[string]string{
+		"evil'; touch /tmp/pwned; echo 'foo": "x",
+	})
+	// The key's single quote should be escaped via the '\'' idiom so the
+	// shell sees the dangerous payload as quoted text, not as separators.
+	want := `'evil'\''; touch /tmp/pwned; echo '\''foo'`
+	if !strings.Contains(out, want) {
+		t.Errorf("malicious key not escape-quoted; want %q in:\n%s", want, out)
 	}
 }
