@@ -100,11 +100,7 @@ project: my-project
 apt_packages: [ghostscript, imagemagick, libmagickwand-dev]
 php_extensions: [imagick]
 
-# Override PHP ini values for both CLI and Apache/FPM (laravel scaffold).
-# Rendered as a build-time conf.d drop-in so it covers PHPUnit/Pest,
-# queue workers, and request handling. Defaults (memory_limit 512M,
-# upload/post 100M) apply when unset; max_execution_time is left at
-# PHP's CLI default of 0 (unlimited).
+# PHP ini overrides (laravel). Defaults: memory_limit=512M, upload/post 100M.
 php_ini:
   memory_limit: 1024M
 
