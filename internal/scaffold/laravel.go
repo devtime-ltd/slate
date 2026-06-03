@@ -4,11 +4,27 @@ import (
 	"embed"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/devtime-ltd/slate/internal/config"
 	"github.com/devtime-ltd/slate/templates"
 )
+
+// laravelDefaultPHPIni is baked into every laravel workspace as
+// /usr/local/etc/php/conf.d/10-slate-defaults.ini. The official php image
+// ships no active php.ini, so without this every PHP process (CLI, queue,
+// PHPUnit/Pest) gets the compiled-in memory_limit=128M default, which is
+// not enough for real Laravel test suites and seeders.
+//
+// We deliberately do NOT set max_execution_time here: PHP's CLI SAPI
+// defaults to 0 (unlimited), which is right for queue workers and tests;
+// imposing a limit in conf.d would silently tighten that for everyone.
+var laravelDefaultPHPIni = map[string]string{
+	"memory_limit":        "512M",
+	"upload_max_filesize": "100M",
+	"post_max_size":       "100M",
+}
 
 type laravelScaffold struct{}
 
@@ -32,10 +48,7 @@ func (s *laravelScaffold) FileMap(slateDir string) map[string]string {
 func (s *laravelScaffold) RenderDockerfile(content string, cfg config.ProjectConfig) (string, error) {
 	aptPkgs := cfg.StringSlice("apt_packages")
 	phpExts := cfg.StringSlice("php_extensions")
-
-	if len(aptPkgs) == 0 && len(phpExts) == 0 {
-		return content, nil
-	}
+	phpIni := cfg.StringMap("php_ini")
 
 	var inject strings.Builder
 
@@ -57,13 +70,38 @@ func (s *laravelScaffold) RenderDockerfile(content string, cfg config.ProjectCon
 		}
 	}
 
-	// Insert before WORKDIR (which precedes USER) so apt/pecl run as root
+	inject.WriteString(renderPHPIniDrop("10-slate-defaults.ini", laravelDefaultPHPIni))
+	if len(phpIni) > 0 {
+		inject.WriteString(renderPHPIniDrop("50-slate-yml.ini", phpIni))
+	}
+
+	// Insert before WORKDIR (which precedes USER) so apt/pecl/ini writes run as root
 	marker := "WORKDIR /app"
 	if idx := strings.Index(content, marker); idx >= 0 {
 		return content[:idx] + inject.String() + "\n" + content[idx:], nil
 	}
 
 	return content + inject.String(), nil
+}
+
+// renderPHPIniDrop emits a Dockerfile RUN that writes a php.ini conf.d
+// drop-in. Keys are sorted for deterministic output. Values are
+// single-quoted with embedded single quotes escaped for the shell.
+func renderPHPIniDrop(filename string, values map[string]string) string {
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	b.WriteString("RUN { \\\n")
+	for _, k := range keys {
+		v := strings.ReplaceAll(values[k], "'", `'\''`)
+		b.WriteString(fmt.Sprintf("        echo '%s = %s'; \\\n", k, v))
+	}
+	b.WriteString(fmt.Sprintf("    } > /usr/local/etc/php/conf.d/%s\n", filename))
+	return b.String()
 }
 
 func (s *laravelScaffold) DefaultEnv(hostname string, globalCfg config.GlobalConfig) map[string]string {

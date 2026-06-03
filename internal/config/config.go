@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -60,18 +61,22 @@ func (c ProjectConfig) StringMap(key string) map[string]string {
 	if !ok {
 		return nil
 	}
-	switch v := val.(type) {
-	case map[string]any:
-		out := make(map[string]string, len(v))
-		for k, item := range v {
-			if s, ok := item.(string); ok {
-				out[k] = s
-			}
-		}
-		return out
-	default:
+	v, ok := val.(map[string]any)
+	if !ok {
 		return nil
 	}
+	out := make(map[string]string, len(v))
+	for k, item := range v {
+		// Accept any scalar by stringifying; lets users write
+		// `max_execution_time: 0` without quoting.
+		switch s := item.(type) {
+		case string:
+			out[k] = s
+		case int, int64, float64, bool:
+			out[k] = fmt.Sprint(s)
+		}
+	}
+	return out
 }
 
 func (c ProjectConfig) StringSlice(key string) []string {
