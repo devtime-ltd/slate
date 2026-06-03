@@ -108,7 +108,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	if cd {
-		return cdIntoWorkspace(wsDir)
+		return spawnShellAt(wsDir)
 	}
 	return nil
 }

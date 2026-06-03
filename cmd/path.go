@@ -63,7 +63,7 @@ var cdCmd = &cobra.Command{
 		if _, err := os.Stat(wsDir); err != nil {
 			return fmt.Errorf("workspace '%s' not found", name)
 		}
-		return cdIntoWorkspace(wsDir)
+		return spawnShellAt(wsDir)
 	},
 }
 

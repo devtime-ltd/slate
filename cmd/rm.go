@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/devtime-ltd/slate/internal/compose"
@@ -53,7 +55,18 @@ func runRm(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	mainRoot, _ := workspace.MainRoot()
+	cwdInside := cwdIsInside(wsDir)
+	dirty, isDirty := dirtyWorktreeSummary(wsDir)
+
+	if isDirty && rmForce {
+		fmt.Fprintf(os.Stderr, "warning: %s has uncommitted changes (%s)\n", name, dirty)
+	}
+
 	if !rmForce {
+		if isDirty {
+			fmt.Printf("%s has uncommitted changes (%s).\n", name, dirty)
+		}
 		fmt.Printf("This will destroy %s (containers, volumes, worktree). Continue? [y/N] ", hostname)
 		reader := bufio.NewReader(os.Stdin)
 		answer, _ := reader.ReadString('\n')
@@ -73,12 +86,61 @@ func runRm(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Destroying %s...\n", hostname)
 	compose.Run(env, "down", "-v")
 
-	mainRoot, _ := workspace.MainRoot()
 	cfg, _ := config.LoadProject(mainRoot)
 	proxy.Unregister(hostname, scaffoldSubdomains(cfg))
 
 	workspace.RemoveWorktree(wsDir)
 
 	fmt.Printf("" + tick() + " %s removed\n", hostname)
+
+	if cwdInside && mainRoot != "" {
+		fmt.Printf("Your cwd was destroyed; dropping into a shell at %q (exit to return).\n", mainRoot)
+		return spawnShellAt(mainRoot)
+	}
 	return nil
+}
+
+// cwdIsInside reports whether the process CWD is at or under dir.
+func cwdIsInside(dir string) bool {
+	cwd, err := os.Getwd()
+	if err != nil || cwd == "" {
+		return false
+	}
+	if cwd == dir {
+		return true
+	}
+	return strings.HasPrefix(cwd, dir+string(filepath.Separator))
+}
+
+// dirtyWorktreeSummary returns a short summary like "3 modified, 1 untracked"
+// and a bool for whether the worktree has any uncommitted changes. Empty
+// string + false means clean (or git failed; we treat that as clean rather
+// than blocking destruction).
+func dirtyWorktreeSummary(wsDir string) (string, bool) {
+	c := exec.Command("git", "status", "--porcelain")
+	c.Dir = wsDir
+	out, err := c.Output()
+	if err != nil {
+		return "", false
+	}
+	body := strings.TrimSpace(string(out))
+	if body == "" {
+		return "", false
+	}
+	var modified, untracked int
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "??") {
+			untracked++
+		} else {
+			modified++
+		}
+	}
+	var parts []string
+	if modified > 0 {
+		parts = append(parts, fmt.Sprintf("%d modified", modified))
+	}
+	if untracked > 0 {
+		parts = append(parts, fmt.Sprintf("%d untracked", untracked))
+	}
+	return strings.Join(parts, ", "), true
 }

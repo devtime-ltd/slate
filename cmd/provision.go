@@ -80,7 +80,7 @@ func runBackgroundProvision(name, wsDir string, opts provisionOpts, cd bool) err
 		return err
 	}
 	if cd {
-		return cdIntoWorkspace(wsDir)
+		return spawnShellAt(wsDir)
 	}
 	fmt.Printf("Workspace dir: %s\n", wsDir)
 	return nil
@@ -138,16 +138,15 @@ func detachProvision(name, wsDir string, opts provisionOpts) error {
 	return nil
 }
 
-// cdIntoWorkspace runs a shell rooted at the workspace dir. Non-zero shell
-// exits (e.g. user typed `exit 1`) are swallowed so they don't look like
-// a slate failure.
-func cdIntoWorkspace(wsDir string) error {
+// spawnShellAt runs $SHELL with cwd set to dir. Non-zero shell exits (e.g.
+// `exit 1`) are swallowed so they don't look like a slate failure.
+func spawnShellAt(dir string) error {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/sh"
 	}
 	c := hostCommand(shell)
-	c.Dir = wsDir
+	c.Dir = dir
 	c.Stdin = os.Stdin
 	if err := c.Run(); err != nil {
 		if _, ok := err.(*exec.ExitError); ok {
