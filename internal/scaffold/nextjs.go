@@ -46,6 +46,8 @@ func (s *nextjsScaffold) Subdomains() map[string]Subdomain {
 	}
 }
 
+func (s *nextjsScaffold) AppLikeServices() []string { return []string{"app"} }
+
 func (s *nextjsScaffold) Tools() map[string]config.Tool {
 	return map[string]config.Tool{
 		"npm":    config.ExecTool{Service: "app", Command: []string{"npm"}},

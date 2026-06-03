@@ -24,6 +24,9 @@ type Scaffold interface {
 	// Subdomains maps subdomain prefix -> compose service name + container port.
 	// Empty key "" is the main app at hostname.test; "vite" becomes vite.hostname.test, etc.
 	Subdomains() map[string]Subdomain
+	// AppLikeServices lists services that share the /app bind. First is the
+	// primary; /app/* file mounts go on it alone (others would race).
+	AppLikeServices() []string
 }
 
 type Subdomain struct {
@@ -109,17 +112,41 @@ func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffol
 		files[k] = v
 	}
 
+	slateDir := filepath.Join(workspaceDir, ".slate")
+	composeOverride := filepath.Join(slateDir, "compose.files.yaml")
+	filesDir := filepath.Join(slateDir, "files")
+
+	for _, p := range []string{slateDir, composeOverride, filesDir} {
+		if info, err := os.Lstat(p); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink; refusing to operate", p)
+		}
+	}
+
+	if err := os.Remove(composeOverride); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "  warning: could not remove stale %s: %v\n", composeOverride, err)
+	}
+
 	if len(files) == 0 {
 		return nil
 	}
 
-	slateDir := filepath.Join(workspaceDir, ".slate")
-	filesDir := filepath.Join(slateDir, "files")
+	// RemoveAll handles symlinks as symlinks (not following them), so a hostile
+	// worktree planting .slate/files/file_N as a symlink can't redirect the
+	// WriteFile below.
+	if err := os.RemoveAll(filesDir); err != nil {
+		return fmt.Errorf("clearing files dir: %w", err)
+	}
 	if err := os.MkdirAll(filesDir, 0o755); err != nil {
 		return fmt.Errorf("creating files dir: %w", err)
 	}
 
-	var mounts []string
+	services := s.AppLikeServices()
+	if len(services) == 0 {
+		return fmt.Errorf("scaffold %q declares no AppLikeServices(); file mounts cannot be applied", s.Name())
+	}
+	primary := services[0]
+
+	var sharedMounts, appOnlyMounts []string
 	i := 0
 	for source, target := range files {
 		expanded := expandHome(source)
@@ -136,25 +163,36 @@ func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffol
 		}
 
 		mount := fmt.Sprintf("      - ./files/%s:%s:ro", localName, target)
-		mounts = append(mounts, mount)
+		if strings.HasPrefix(target, "/app/") {
+			appOnlyMounts = append(appOnlyMounts, mount)
+		} else {
+			sharedMounts = append(sharedMounts, mount)
+		}
 		i++
 	}
 
-	if len(mounts) == 0 {
+	if len(sharedMounts) == 0 && len(appOnlyMounts) == 0 {
 		return nil
 	}
 
-	// Write compose override with the file mounts for all app-like services
 	var b strings.Builder
 	b.WriteString("services:\n")
-	for _, svc := range []string{"app", "queue"} {
+	for _, svc := range services {
+		if svc != primary && len(sharedMounts) == 0 {
+			continue
+		}
 		b.WriteString(fmt.Sprintf("  %s:\n    volumes:\n", svc))
-		for _, m := range mounts {
+		for _, m := range sharedMounts {
 			b.WriteString(m + "\n")
+		}
+		if svc == primary {
+			for _, m := range appOnlyMounts {
+				b.WriteString(m + "\n")
+			}
 		}
 	}
 
-	return os.WriteFile(filepath.Join(slateDir, "compose.files.yaml"), []byte(b.String()), 0o644)
+	return os.WriteFile(composeOverride, []byte(b.String()), 0o644)
 }
 
 var dbNameRe = regexp.MustCompile(`\{\{DB_NAME(?::([^}]*))?\}\}`)

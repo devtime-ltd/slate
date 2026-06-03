@@ -1,6 +1,9 @@
 package scaffold
 
 import (
+	"embed"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -325,3 +328,202 @@ func TestRenderPHPIniDropEscapesMaliciousKey(t *testing.T) {
 		t.Errorf("malicious key not escape-quoted; want %q in:\n%s", want, out)
 	}
 }
+
+func TestGenerateFileMountsAppTargetOnlyOnAppService(t *testing.T) {
+	ws, src := newWorkspaceWithSourceFile(t, "x")
+	cfg := config.ProjectConfig{Extra: map[string]any{
+		"files": map[string]any{src: "/app/.slate/composer/auth.json"},
+	}}
+	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}); err != nil {
+		t.Fatal(err)
+	}
+
+	override, err := os.ReadFile(filepath.Join(ws, ".slate/compose.files.yaml"))
+	if err != nil {
+		t.Fatalf("expected compose.files.yaml: %v", err)
+	}
+	out := string(override)
+
+	if !strings.Contains(out, "/app/.slate/composer/auth.json:ro") {
+		t.Errorf("missing /app target mount entry:\n%s", out)
+	}
+	if strings.Contains(out, "queue:") {
+		t.Errorf("/app target mount must not be declared on queue (races on host mountpoint):\n%s", out)
+	}
+}
+
+func TestGenerateFileMountsNonAppTargetSharedAcrossServices(t *testing.T) {
+	ws, src := newWorkspaceWithSourceFile(t, "x")
+	cfg := config.ProjectConfig{Extra: map[string]any{
+		"files": map[string]any{src: "/etc/something/file"},
+	}}
+	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}); err != nil {
+		t.Fatal(err)
+	}
+
+	override, err := os.ReadFile(filepath.Join(ws, ".slate/compose.files.yaml"))
+	if err != nil {
+		t.Fatalf("expected compose.files.yaml: %v", err)
+	}
+	out := string(override)
+	if !strings.Contains(out, ":/etc/something/file:ro") {
+		t.Errorf("expected bind mount entry, got:\n%s", out)
+	}
+	if !strings.Contains(out, "queue:") {
+		t.Errorf("non-/app target should also appear on queue:\n%s", out)
+	}
+}
+
+func TestGenerateFileMountsAppTargetDoesNotWriteToWorkspace(t *testing.T) {
+	ws, src := newWorkspaceWithSourceFile(t, "secret-token")
+	cfg := config.ProjectConfig{Extra: map[string]any{
+		"files": map[string]any{src: "/app/.npmrc"},
+	}}
+	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".npmrc")); !os.IsNotExist(err) {
+		t.Errorf("/app target must not be materialised in the worktree (would expose credentials to git status); err=%v", err)
+	}
+}
+
+func TestGenerateFileMountsRefusesSymlinkedSlateDir(t *testing.T) {
+	ws, src := newWorkspaceWithSourceFile(t, "x")
+	target := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(ws, ".slate")); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.ProjectConfig{Extra: map[string]any{
+		"files": map[string]any{src: "/etc/foo"},
+	}}
+	err := GenerateFileMounts(ws, cfg, &nullScaffold{})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("expected symlink refusal, got %v", err)
+	}
+}
+
+func TestGenerateFileMountsRefusesSymlinkedFilesDir(t *testing.T) {
+	ws, src := newWorkspaceWithSourceFile(t, "x")
+	if err := os.MkdirAll(filepath.Join(ws, ".slate"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(ws, ".slate/files")); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.ProjectConfig{Extra: map[string]any{
+		"files": map[string]any{src: "/etc/foo"},
+	}}
+	err := GenerateFileMounts(ws, cfg, &nullScaffold{})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("expected symlink refusal for .slate/files, got %v", err)
+	}
+}
+
+func TestGenerateFileMountsClearsSymlinkedFilePayload(t *testing.T) {
+	ws, src := newWorkspaceWithSourceFile(t, "fresh-content")
+	filesDir := filepath.Join(ws, ".slate/files")
+	if err := os.MkdirAll(filesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outsideTarget := filepath.Join(t.TempDir(), "outside-victim")
+	if err := os.WriteFile(outsideTarget, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideTarget, filepath.Join(filesDir, "file_0")); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.ProjectConfig{Extra: map[string]any{
+		"files": map[string]any{src: "/etc/foo"},
+	}}
+	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}); err != nil {
+		t.Fatal(err)
+	}
+
+	written, err := os.ReadFile(outsideTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != "original" {
+		t.Errorf("symlinked file_0 leaked write to outside target; got %q, want %q", written, "original")
+	}
+}
+
+func TestGenerateFileMountsErrorsWhenScaffoldHasNoAppLikeServices(t *testing.T) {
+	ws, src := newWorkspaceWithSourceFile(t, "x")
+	cfg := config.ProjectConfig{Extra: map[string]any{
+		"files": map[string]any{src: "/etc/foo"},
+	}}
+	if err := GenerateFileMounts(ws, cfg, &noAppServicesScaffold{}); err == nil {
+		t.Error("expected error when scaffold has no AppLikeServices() but files configured")
+	}
+}
+
+func TestGenerateFileMountsScaffoldWithoutQueue(t *testing.T) {
+	ws, src := newWorkspaceWithSourceFile(t, "x")
+	cfg := config.ProjectConfig{Extra: map[string]any{
+		"files": map[string]any{src: "/etc/something/file"},
+	}}
+	if err := GenerateFileMounts(ws, cfg, &appOnlyScaffold{}); err != nil {
+		t.Fatal(err)
+	}
+	override, err := os.ReadFile(filepath.Join(ws, ".slate/compose.files.yaml"))
+	if err != nil {
+		t.Fatalf("expected compose.files.yaml: %v", err)
+	}
+	if strings.Contains(string(override), "queue:") {
+		t.Errorf("scaffold without queue should not emit queue section:\n%s", override)
+	}
+}
+
+func TestGenerateFileMountsClearsStaleOverride(t *testing.T) {
+	ws, _ := newWorkspaceWithSourceFile(t, "x")
+	stale := filepath.Join(ws, ".slate/compose.files.yaml")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("stale: true"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := GenerateFileMounts(ws, config.ProjectConfig{}, &nullScaffold{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale compose.files.yaml should be removed when no mounts remain (err=%v)", err)
+	}
+}
+
+func newWorkspaceWithSourceFile(t *testing.T, content string) (string, string) {
+	t.Helper()
+	ws := t.TempDir()
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "source")
+	if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return ws, src
+}
+
+type nullScaffold struct{}
+
+func (nullScaffold) Name() string                                                    { return "null" }
+func (nullScaffold) FS() embed.FS                                                    { return embed.FS{} }
+func (nullScaffold) FileMap(string) map[string]string                                { return nil }
+func (nullScaffold) RenderDockerfile(c string, _ config.ProjectConfig) (string, error) {
+	return c, nil
+}
+func (nullScaffold) DefaultFiles() map[string]string                              { return nil }
+func (nullScaffold) DefaultEnv(string, config.GlobalConfig) map[string]string     { return nil }
+func (nullScaffold) Tools() map[string]config.Tool                                { return nil }
+func (nullScaffold) Subdomains() map[string]Subdomain                             { return nil }
+func (nullScaffold) AppLikeServices() []string                                    { return []string{"app", "queue"} }
+
+type appOnlyScaffold struct{ nullScaffold }
+
+func (appOnlyScaffold) AppLikeServices() []string { return []string{"app"} }
+
+type noAppServicesScaffold struct{ nullScaffold }
+
+func (noAppServicesScaffold) AppLikeServices() []string { return nil }
