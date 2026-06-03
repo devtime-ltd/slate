@@ -85,8 +85,10 @@ func (s *laravelScaffold) RenderDockerfile(content string, cfg config.ProjectCon
 }
 
 // renderPHPIniDrop emits a Dockerfile RUN that writes a php.ini conf.d
-// drop-in. Keys are sorted for deterministic output. Values are
-// single-quoted with embedded single quotes escaped for the shell.
+// drop-in. Keys are sorted for deterministic output. Both key and value
+// are single-quoted and have any embedded single quotes escaped so that
+// a hostile slate.yml can't break out of the quoting to inject shell
+// during image build.
 func renderPHPIniDrop(filename string, values map[string]string) string {
 	keys := make([]string, 0, len(values))
 	for k := range values {
@@ -97,11 +99,19 @@ func renderPHPIniDrop(filename string, values map[string]string) string {
 	var b strings.Builder
 	b.WriteString("RUN { \\\n")
 	for _, k := range keys {
-		v := strings.ReplaceAll(values[k], "'", `'\''`)
-		b.WriteString(fmt.Sprintf("        echo '%s = %s'; \\\n", k, v))
+		safeK := shellSingleQuote(k)
+		safeV := shellSingleQuote(values[k])
+		b.WriteString(fmt.Sprintf("        printf '%%s = %%s\\n' %s %s; \\\n", safeK, safeV))
 	}
 	b.WriteString(fmt.Sprintf("    } > /usr/local/etc/php/conf.d/%s\n", filename))
 	return b.String()
+}
+
+// shellSingleQuote wraps s in single quotes, escaping any embedded single
+// quotes via the standard '\'' idiom. Safe to pass any string through as
+// a single shell-word argument.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func (s *laravelScaffold) DefaultEnv(hostname string, globalCfg config.GlobalConfig) map[string]string {
