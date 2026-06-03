@@ -253,3 +253,54 @@ func TestNextjsDefaultEnv(t *testing.T) {
 		t.Errorf("DATABASE_URL = %q, should contain postgresql://", env["DATABASE_URL"])
 	}
 }
+
+func TestLaravelDockerfileBakesPHPDefaults(t *testing.T) {
+	s, _ := Get("laravel")
+	out, err := s.RenderDockerfile("WORKDIR /app\nUSER www-data\n", config.ProjectConfig{Scaffold: "laravel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "/usr/local/etc/php/conf.d/10-slate-defaults.ini") {
+		t.Errorf("default php.ini drop-in missing from Dockerfile:\n%s", out)
+	}
+	if !strings.Contains(out, "memory_limit = 512M") {
+		t.Errorf("default memory_limit not set:\n%s", out)
+	}
+}
+
+func TestLaravelDockerfilePHPIniOverride(t *testing.T) {
+	s, _ := Get("laravel")
+	cfg := config.ProjectConfig{
+		Scaffold: "laravel",
+		Extra: map[string]any{
+			"php_ini": map[string]any{
+				"memory_limit":       "2G",
+				"max_execution_time": 0,
+			},
+		},
+	}
+	out, err := s.RenderDockerfile("WORKDIR /app\nUSER www-data\n", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "/usr/local/etc/php/conf.d/50-slate-yml.ini") {
+		t.Errorf("user php.ini drop-in missing:\n%s", out)
+	}
+	if !strings.Contains(out, "memory_limit = 2G") {
+		t.Errorf("user memory_limit override missing:\n%s", out)
+	}
+	if !strings.Contains(out, "max_execution_time = 0") {
+		t.Errorf("unquoted int php_ini value should be stringified:\n%s", out)
+	}
+}
+
+func TestLaravelDockerfileDoesNotImposeMaxExecutionTime(t *testing.T) {
+	s, _ := Get("laravel")
+	out, err := s.RenderDockerfile("WORKDIR /app\n", config.ProjectConfig{Scaffold: "laravel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "max_execution_time") {
+		t.Errorf("default ini should not set max_execution_time (let PHP CLI default of 0 apply):\n%s", out)
+	}
+}
