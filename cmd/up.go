@@ -75,7 +75,9 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("generating scaffold: %w", err)
 	}
 	if s, err := scaffold.Get(cfg.Scaffold); err == nil {
-		scaffold.GenerateFileMounts(wsDir, cfg, s)
+		if err := scaffold.GenerateFileMounts(wsDir, cfg, s); err != nil {
+			return fmt.Errorf("generating file mounts: %w", err)
+		}
 	}
 
 	projectName, err := workspace.ProjectName(cfg.Project)

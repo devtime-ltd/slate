@@ -144,6 +144,8 @@ func (s *laravelScaffold) Subdomains() map[string]Subdomain {
 	}
 }
 
+func (s *laravelScaffold) AppLikeServices() []string { return []string{"app", "queue"} }
+
 func (s *laravelScaffold) Tools() map[string]config.Tool {
 	return map[string]config.Tool{
 		"composer": config.ExecTool{Service: "app", Command: []string{"composer"}},
