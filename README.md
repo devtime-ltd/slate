@@ -21,35 +21,36 @@ Open `https://your-project--my-feature.test` and start developing.
 
 ```
 Workspace lifecycle:
-  slate new <name>          Create a new workspace (containers + HTTPS)
-  slate up [name]           Start/refresh a workspace (offers to create if missing)
-  slate down [name]         Stop (preserves data)
-  slate restart <name>      Restart workspace or single service
-  slate rm <name>           Destroy workspace (containers, volumes, worktree)
-  slate ls [--all]          List workspaces (current project or all registered)
+  slate new <name>                Create a new workspace (containers + HTTPS)
+  slate up [name]                 Start/refresh a workspace (offers to create if missing)
+  slate down [name]                Stop (preserves data)
+  slate restart [name] [service]  Restart workspace or single service
+  slate rm [name]                 Destroy workspace (containers, volumes, worktree)
+  slate ls [--all]                List workspaces (current project or all registered)
 
 Tools:
-  slate setup               One-time host setup (proxy + CA cert + secret key)
-  slate teardown            Remove all slate infrastructure
-  slate doctor              Check dependencies
-  slate open <name>         Open workspace URL in browser
-  slate path <name>         Print workspace path (pipeable, --open)
-  slate cd <name>           Spawn a sub-shell rooted at the workspace dir
-  slate code <name>         Open workspace in your editor
-  slate shell <name>        Bash shell in app container
-  slate logs <name> [svc]   Tail logs (default: all services)
-  slate proxy               Manage the HTTPS proxy
+  slate setup                     One-time host setup (proxy + CA cert + secret key)
+  slate teardown                  Remove all slate infrastructure
+  slate doctor                    Check dependencies
+  slate open [name]               Open workspace URL in browser
+  slate path [name]               Print workspace path (pipeable, --open)
+  slate cd [name]                 Spawn a sub-shell rooted at the workspace dir
+  slate code [name]               Open workspace in your editor
+  slate shell [name]              Bash shell in app container
+  slate logs [name] [svc]         Tail logs (default: all services)
+  slate proxy                     Manage the HTTPS proxy
 
 Scaffold tools (from slate.yml):
   Available commands depend on your scaffold. For Laravel:
   slate composer <args>     slate artisan <args>     slate tinker
   slate pint <args>         slate pest <args>
   slate npm <args>          slate npx <args>
-  slate mysql <workspace>   Print DB connection info (--open, --url)
+  slate mysql [name]        Print DB connection info (--open, --url)
 ```
 
-Add `--project <name>` to any command to target a project other than the
-current directory's. The project name comes from the registry (`slate ls --all`).
+Omit the workspace name on any command that takes one and slate first checks your current directory (if you're inside a workspace, it's used) and otherwise pops an interactive picker over the project's workspaces.
+
+Add `--project <name>` to any command to target a project other than the current directory's. The project name comes from the registry (`slate ls --all`).
 
 ### Useful flags
 
@@ -58,6 +59,7 @@ current directory's. The project name comes from the registry (`slate ls --all`)
 - `slate new <name> --cd` / `--cd=false`: explicitly opt in or out of dropping into a shell at the new workspace. Default comes from `auto_cd` in `~/.config/slate/config.yml` (defaults to `true`). With `--bg` the shell is spawned immediately; without, after provisioning finishes.
 - `slate up [name] --fresh`: recreate containers + volumes (worktree code preserved) and run the new-workspace lifecycle.
 - `slate up [name] --build`: force image rebuild.
+- `slate rm [name]`: warns if the worktree has uncommitted changes (`3 modified, 1 untracked`) before asking for confirmation; `-f` skips the prompt but still warns to stderr. If your shell's cwd was inside the workspace being destroyed, slate drops you into a sub-shell at the project's main checkout afterwards (type `exit` to return).
 
 ## How It Works
 

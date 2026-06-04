@@ -63,11 +63,23 @@ The Scaffold interface exposes a `Tools() map[string]config.Tool` method. `Tool`
 
 User-defined tools in `slate.yml` are always exec tools. Scaffolds can mix both.
 
+## Scaffold interface checklist
+
+When adding a new scaffold, implement every method on `internal/scaffold.Scaffold`. The non-obvious one:
+
+- **`AppLikeServices() []string`** lists compose services that share the `/app` bind (the workspace dir bind-mounted into the container). First entry is the primary; `GenerateFileMounts` puts `/app/*` file mount targets on it alone and shared (non-`/app`) mounts on every listed service. Laravel returns `["app", "queue"]`, nextjs returns `["app"]`. Returning an empty slice while file mounts are configured is treated as a scaffold bug and errors out.
+
+## File mount handling
+
+`GenerateFileMounts` writes a compose override (`.slate/compose.files.yaml`) declaring bind mounts for each `DefaultFiles` + user `files:` entry. Two rules worth knowing:
+
+- **`/app/*` targets only attach to `AppLikeServices()[0]`.** `/app` is bind-mounted on every app-like service, so the same host file backs the mountpoint in every container; declaring the same `/app/*` mount on more than one races at container-create time.
+- **Symlink defenses are layered.** Before any write, `.slate`, `compose.files.yaml`, and `.slate/files` are `Lstat`-checked and refused if any is a symlink. `.slate/files` is then `RemoveAll`'d before re-creation so any pre-existing `file_N` symlink can't redirect the subsequent `WriteFile`.
+
 ## Current State
 
-Implemented commands match the README. Notable status beyond what the README covers:
+Implemented commands match the README. Status notes beyond what the README covers:
 
-- `--bg` background provisioning, `--cd` shell spawn, mutual exclusion guards, and failed-state surfacing in `ls` all landed.
 - `--project <name>` works from anywhere on disk (including outside any git repo).
 - No end-to-end CI tests against Docker yet.
 - The `attach` command (TUI log viewer) is not yet implemented; see Roadmap.
