@@ -117,10 +117,14 @@ func DefaultProject() ProjectConfig {
 func DefaultSetupForScaffold(scaffold string) string {
 	switch scaffold {
 	case "laravel":
+		// migrate (no --seed): the up hook runs on every `slate new` AND every
+		// `slate up`, so seeding here re-runs all seeders on each restart and
+		// duplicates data. Initial seeding is handled by the `new`/`--fresh`
+		// hook (migrate:fresh --seed) below.
 		return `composer install --no-progress --no-interaction
 php artisan storage:link --force 2>/dev/null || true
 grep -q '^APP_KEY=base64:' .env || php artisan key:generate --ansi
-php artisan migrate --seed --force
+php artisan migrate --force
 `
 	case "nextjs":
 		return `npm install

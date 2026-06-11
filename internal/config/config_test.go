@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -187,5 +188,23 @@ func TestResolvedToolsEmpty(t *testing.T) {
 	tools := cfg.ResolvedTools()
 	if tools != nil {
 		t.Errorf("ResolvedTools without override should return nil, got %v", tools)
+	}
+}
+
+// The up hook runs on every `slate up`, so it must migrate without seeding;
+// otherwise restarts re-run seeders and duplicate data. Seeding belongs only
+// in the fresh hook (slate new / slate up --fresh).
+func TestLaravelUpHookDoesNotSeed(t *testing.T) {
+	up := DefaultSetupForScaffold("laravel")
+	if strings.Contains(up, "--seed") || strings.Contains(up, "db:seed") {
+		t.Errorf("laravel up hook must not seed (re-runs on every up), got:\n%s", up)
+	}
+	if !strings.Contains(up, "migrate") {
+		t.Errorf("laravel up hook should still migrate, got:\n%s", up)
+	}
+
+	fresh := DefaultFreshSetupForScaffold("laravel")
+	if !strings.Contains(fresh, "--seed") {
+		t.Errorf("laravel fresh hook should seed, got:\n%s", fresh)
 	}
 }
