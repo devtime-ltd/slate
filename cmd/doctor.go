@@ -104,9 +104,11 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	_, err = os.Stat(entrypoint)
 	check(err == nil, fmt.Sprintf("slate entrypoint at %s", entrypoint))
 
-	// Global config
-	cfg, _ := config.LoadGlobal()
-	fmt.Printf("\n  HTTPS port: %d\n", cfg.HTTPSPort)
+	// HTTPS port: report the port the proxy is actually serving on (which can
+	// differ from config when the configured port was taken, e.g. Herd on 443),
+	// falling back to the configured value when the proxy isn't running.
+	_, httpsPort, _ := DetectProxyPorts()
+	fmt.Printf("\n  HTTPS port: %d\n", httpsPort)
 
 	fmt.Println()
 	if allOK {
