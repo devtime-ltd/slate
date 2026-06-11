@@ -527,3 +527,61 @@ func (appOnlyScaffold) AppLikeServices() []string { return []string{"app"} }
 type noAppServicesScaffold struct{ nullScaffold }
 
 func (noAppServicesScaffold) AppLikeServices() []string { return nil }
+
+func TestEnsureGitignoreAddsBothEntries(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureGitignore(dir); err != nil {
+		t.Fatalf("EnsureGitignore: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	for _, want := range []string{".slate/", ".env.container"} {
+		if !hasGitignoreLine(string(data), want) {
+			t.Errorf("expected .gitignore to contain %q, got:\n%s", want, data)
+		}
+	}
+}
+
+// Regression: a project that already ignores .slate/ (e.g. set up by an older
+// slate) must still get .env.container added, rather than returning early.
+func TestEnsureGitignoreAddsEnvContainerWhenSlateAlreadyPresent(t *testing.T) {
+	dir := t.TempDir()
+	gi := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(gi, []byte("/vendor\n.slate/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureGitignore(dir); err != nil {
+		t.Fatalf("EnsureGitignore: %v", err)
+	}
+	data, _ := os.ReadFile(gi)
+	if !hasGitignoreLine(string(data), ".env.container") {
+		t.Errorf("expected .env.container to be added, got:\n%s", data)
+	}
+}
+
+func TestEnsureGitignoreIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 3; i++ {
+		if err := EnsureGitignore(dir); err != nil {
+			t.Fatalf("EnsureGitignore #%d: %v", i, err)
+		}
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if got := strings.Count(string(data), ".env.container"); got != 1 {
+		t.Errorf("expected .env.container exactly once, got %d:\n%s", got, data)
+	}
+	if got := strings.Count(string(data), ".slate/"); got != 1 {
+		t.Errorf("expected .slate/ exactly once, got %d:\n%s", got, data)
+	}
+}
+
+func hasGitignoreLine(content, want string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
+}

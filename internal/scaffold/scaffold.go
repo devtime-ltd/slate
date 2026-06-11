@@ -260,11 +260,25 @@ func ComposeFilePath(workspaceDir string) string {
 func EnsureGitignore(projectDir string) error {
 	gi := filepath.Join(projectDir, ".gitignore")
 	data, _ := os.ReadFile(gi)
+
+	have := map[string]bool{}
 	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == ".slate" || trimmed == ".slate/" {
-			return nil
-		}
+		have[strings.TrimSpace(line)] = true
+	}
+
+	// Both slate artifacts live in the worktree: the .slate/ infra dir and the
+	// generated .env.container at the worktree root. The latter is easy to miss
+	// and otherwise shows up as an untracked file (and trips the `slate rm`
+	// uncommitted-changes warning) on every workspace.
+	var missing []string
+	if !have[".slate"] && !have[".slate/"] {
+		missing = append(missing, ".slate/")
+	}
+	if !have[".env.container"] {
+		missing = append(missing, ".env.container")
+	}
+	if len(missing) == 0 {
+		return nil
 	}
 
 	f, err := os.OpenFile(gi, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -274,10 +288,16 @@ func EnsureGitignore(projectDir string) error {
 	defer f.Close()
 
 	if len(data) > 0 && data[len(data)-1] != '\n' {
-		f.WriteString("\n")
+		if _, err := f.WriteString("\n"); err != nil {
+			return err
+		}
 	}
-	_, err = f.WriteString(".slate/\n")
-	return err
+	for _, entry := range missing {
+		if _, err := f.WriteString(entry + "\n"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func GenerateEnvContainer(workspaceDir, hostname, project, workspace string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) error {
