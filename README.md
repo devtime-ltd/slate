@@ -4,11 +4,38 @@ Isolated dev workspaces powered by Docker. One command to start, HTTPS out of th
 
 Your code stays on the host, everything else runs in Docker containers. Each workspace gets its own database, services, and HTTPS URL, spun up from a git worktree in seconds.
 
+## Installation
+
+Slate is a single Go binary. Building it requires [Go 1.26+](https://go.dev/dl/); the scaffold templates are embedded at compile time, so there are no other build-time dependencies.
+
+To **run** slate you also need Docker — [OrbStack](https://orbstack.dev) on macOS (recommended) or Docker Engine on Linux — and Git. See [Requirements](#requirements) for details.
+
+```sh
+# Install straight from source into $GOBIN (usually ~/go/bin)
+go install github.com/devtime-ltd/slate@latest
+```
+
+Or build from a checkout:
+
+```sh
+git clone https://github.com/devtime-ltd/slate.git
+cd slate
+go build -o slate .          # produces ./slate
+# optionally move it onto your PATH:
+sudo mv slate /usr/local/bin/
+```
+
+Make sure the install target is on your `PATH` (for `go install`, add `$(go env GOBIN)` — or `$(go env GOPATH)/bin` if `GOBIN` is unset). Verify with:
+
+```sh
+slate doctor             # checks Docker, Git, and proxy status
+```
+
 ## Quick Start
 
 ```sh
 # One-time setup
-slate setup              # starts the HTTPS proxy, installs CA cert
+slate setup              # starts the HTTPS proxy + *.test DNS, installs CA cert
 
 # In your project
 slate init laravel       # creates slate.yml
@@ -29,7 +56,7 @@ Workspace lifecycle:
   slate ls [--all]                List workspaces (current project or all registered)
 
 Tools:
-  slate setup                     One-time host setup (proxy + CA cert + secret key)
+  slate setup                     One-time host setup (proxy + DNS + CA cert + secret key)
   slate teardown                  Remove all slate infrastructure
   slate doctor                    Check dependencies
   slate open [name]               Open workspace URL in browser
@@ -39,6 +66,7 @@ Tools:
   slate shell [name]              Bash shell in app container
   slate logs [name] [svc]         Tail logs (default: all services)
   slate proxy                     Manage the HTTPS proxy
+  slate dns                       Manage the *.test DNS resolver
 
 Scaffold tools (from slate.yml):
   Available commands depend on your scaffold. For Laravel:
@@ -176,3 +204,5 @@ The registered projects index lives at `~/.config/slate/projects` (one `name=pat
 - Git
 
 That's it. Everything else is managed by slate.
+
+`slate setup` also makes `*.test` resolve locally by running a small dnsmasq container on `127.0.0.1:53` and pointing `/etc/resolver/test` at it (one `sudo` prompt, macOS). On Linux the container runs the same way, but you point your system resolver (systemd-resolved/NetworkManager) at `127.0.0.1` for `*.test` yourself. If `*.test` already resolves (e.g. you run your own dnsmasq), slate leaves it alone.
