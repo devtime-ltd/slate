@@ -14,7 +14,8 @@ var setupCmd = &cobra.Command{
 	Long: `Sets up slate infrastructure on this machine:
   1. Generates a secret key for password derivation
   2. Starts the HTTPS proxy (Caddy container)
-  3. Installs the CA certificate into the system trust store`,
+  3. Starts the *.test DNS resolver (dnsmasq container + /etc/resolver)
+  4. Installs the CA certificate into the system trust store`,
 	GroupID: "tools",
 	RunE:    runSetup,
 }
@@ -60,6 +61,12 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println()
+	if err := setupDNS(); err != nil {
+		fmt.Printf("  "+warn()+" DNS setup incomplete: %v\n", err)
+		fmt.Println("  Retry with `slate dns start`.")
+	}
+
+	fmt.Println()
 	if err := runProxyTrust(cmd, args); err != nil {
 		fmt.Printf("  " + warn() + " CA trust failed: %v\n", err)
 		fmt.Println("  Run `slate proxy trust` manually if needed.")
@@ -74,6 +81,8 @@ func runTeardown(cmd *cobra.Command, args []string) error {
 
 	runProxyStop(cmd, args)
 	fmt.Println("  " + tick() + " Proxy removed")
+
+	teardownDNS()
 
 	fmt.Println("  " + tick() + " Workspace caches are removed with `slate rm`")
 

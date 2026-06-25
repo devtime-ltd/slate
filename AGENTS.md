@@ -97,10 +97,11 @@ Current state: external Caddy container managed by slate, auto-detected on `prox
 - `slate setup` installs CA trust
 - Falls back to external Caddy detection if the user already has one running
 
-**DNS resolution:** `.test` still needs routing to 127.0.0.1. Options:
-- Manage `/etc/hosts` (cross-platform, needs sudo once)
-- Embedded resolver (ambitious)
-- Document manual dnsmasq setup
+**DNS resolution:** done — `slate setup` runs a dnsmasq container (`slate-dns`) on
+`127.0.0.1:53` answering `*.test` → `127.0.0.1`, and on macOS writes `/etc/resolver/test`
+(see `cmd/dns.go`). Skipped when `*.test` already resolves. Linux still needs the user to
+point their system resolver at `127.0.0.1`. A future embedded resolver could fold this into
+the binary.
 
 ### P2 - Additional Scaffolds
 

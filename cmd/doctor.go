@@ -98,6 +98,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	out, err := exec.Command("dig", "+short", "test.test", "@127.0.0.1").Output()
 	dnsOK := err == nil && strings.Contains(string(out), "127.0.0.1")
 	check(dnsOK, "*.test DNS resolves to 127.0.0.1")
+	if !dnsOK {
+		fmt.Println("     Run `slate dns start` (or `slate setup`).")
+	}
 
 	// Entrypoint
 	entrypoint := config.DataDir() + "/entrypoint.sh"
