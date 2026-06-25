@@ -1,0 +1,45 @@
+{
+  "name": "@devtime-ltd/vite-plugin-slate",
+  "version": "0.1.0",
+  "description": "Vite plugin that wires the dev server to slate's HTTPS proxy.",
+  "type": "module",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "vite",
+    "vite-plugin",
+    "slate",
+    "laravel",
+    "https",
+    "proxy",
+    "hmr"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devtime-ltd/slate.git",
+    "directory": "vite-plugin-slate"
+  },
+  "homepage": "https://github.com/devtime-ltd/slate/tree/main/vite-plugin-slate#readme",
+  "bugs": "https://github.com/devtime-ltd/slate/issues",
+  "license": "MIT",
+  "peerDependencies": {
+    "vite": ">=5"
+  }
+}

@@ -181,6 +181,30 @@ User-defined tools in `slate.yml` are always exec tools (run a command in a cont
 | `nextjs` | Node 22, PostgreSQL, Mailpit | app, postgres, mailpit |
 | `none` | Bring your own compose.yaml | User-defined |
 
+### Vite over HTTPS (Laravel)
+
+Inside a workspace, Vite is served over a proxied HTTPS subdomain
+(`https://vite.<project>--<workspace>.test`), not `http://0.0.0.0:5173`. So the
+browser loads assets and HMR over HTTPS — instead of hitting mixed-content blocks
+or Vite's host check — add [`@devtime-ltd/vite-plugin-slate`](vite-plugin-slate)
+to your `vite.config.js`:
+
+```sh
+npm i -D @devtime-ltd/vite-plugin-slate
+```
+
+```js
+import slate from "@devtime-ltd/vite-plugin-slate";
+
+export default defineConfig({
+  plugins: [laravel({ /* ... */ }), slate()],
+});
+```
+
+slate sets `VITE_DEV_SERVER_URL` in the workspace; the plugin reads it to point
+Vite's `origin`/`allowedHosts`/`cors`/`hmr` at the proxy. It's a no-op when that
+var is unset, so `npm run dev` outside slate is unaffected.
+
 ## Global Config
 
 `~/.config/slate/config.yml` (all optional):
