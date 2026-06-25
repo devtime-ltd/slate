@@ -57,3 +57,19 @@ func ExpandPasswords(value, secretKey, project, workspace string) string {
 		return DerivePassword(secretKey, project, workspace, salt)
 	})
 }
+
+// DeriveAppKey returns a stable Laravel APP_KEY. The HMAC sum is exactly the
+// 32 bytes Laravel's AES-256 ciphers require, in the `base64:` form it expects.
+func DeriveAppKey(secretKey, project, workspace string) string {
+	mac := hmac.New(sha256.New, []byte(secretKey))
+	mac.Write([]byte(project + ":" + workspace + ":laravel-app-key"))
+	return "base64:" + base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+var genAppKeyRe = regexp.MustCompile(`\{\{GEN_APP_KEY\}\}`)
+
+func ExpandAppKey(value, secretKey, project, workspace string) string {
+	return genAppKeyRe.ReplaceAllStringFunc(value, func(string) string {
+		return DeriveAppKey(secretKey, project, workspace)
+	})
+}

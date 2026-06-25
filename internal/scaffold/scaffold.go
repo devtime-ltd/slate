@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"text/template"
 
 	"github.com/devtime-ltd/slate/internal/config"
 )
@@ -52,7 +53,7 @@ func Get(name string) (Scaffold, error) {
 	return s, nil
 }
 
-func Generate(workspaceDir string, cfg config.ProjectConfig) error {
+func Generate(workspaceDir, mainRoot string, cfg config.ProjectConfig) error {
 	slateDir := filepath.Join(workspaceDir, ".slate")
 	if err := os.MkdirAll(slateDir, 0o755); err != nil {
 		return fmt.Errorf("creating .slate dir: %w", err)
@@ -95,12 +96,60 @@ func Generate(workspaceDir string, cfg config.ProjectConfig) error {
 			}
 		}
 
+		if entry.Name() == "compose.yaml.tmpl" {
+			content, err = renderCompose(content, mainRoot)
+			if err != nil {
+				return fmt.Errorf("rendering compose.yaml: %w", err)
+			}
+		}
+
 		if err := os.WriteFile(destPath, []byte(content), 0o644); err != nil {
 			return fmt.Errorf("writing %s: %w", destPath, err)
 		}
 	}
 
 	return nil
+}
+
+// renderCompose omits the ${MAIN_ROOT}/.env bind mount when the main checkout
+// has no real .env file, otherwise Docker silently creates the missing source
+// as a directory in the user's project. A directory at that path counts as
+// absent so a leftover one is never re-mounted.
+func renderCompose(content, mainRoot string) (string, error) {
+	hasMainEnv := false
+	if mainRoot != "" {
+		if info, err := os.Stat(filepath.Join(mainRoot, ".env")); err == nil && !info.IsDir() {
+			hasMainEnv = true
+		}
+	}
+
+	tmpl, err := template.New("compose").Parse(content)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	if err := tmpl.Execute(&b, map[string]any{"HasMainEnv": hasMainEnv}); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+func rootEnvHasValue(mainRoot, key string) bool {
+	if mainRoot == "" {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(mainRoot, ".env"))
+	if err != nil {
+		return false
+	}
+	prefix := key + "="
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix)) != ""
+		}
+	}
+	return false
 }
 
 func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffold) error {
@@ -300,7 +349,7 @@ func EnsureGitignore(projectDir string) error {
 	return nil
 }
 
-func GenerateEnvContainer(workspaceDir, hostname, project, workspace string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) error {
+func GenerateEnvContainer(workspaceDir, mainRoot, hostname, project, workspace string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) error {
 	defaults := make(map[string]string)
 
 	// Get scaffold-specific defaults if available
@@ -308,6 +357,12 @@ func GenerateEnvContainer(workspaceDir, hostname, project, workspace string, cfg
 		for k, v := range s.DefaultEnv(hostname, globalCfg) {
 			defaults[k] = v
 		}
+	}
+
+	// .env.container is merged after the root .env and would override it, so
+	// don't clobber a real APP_KEY the project already sets.
+	if _, userSet := cfg.Env["APP_KEY"]; !userSet && rootEnvHasValue(mainRoot, "APP_KEY") {
+		delete(defaults, "APP_KEY")
 	}
 
 	// User overrides from slate.yml
@@ -319,6 +374,7 @@ func GenerateEnvContainer(workspaceDir, hostname, project, workspace string, cfg
 	for k, v := range defaults {
 		v = expandDBName(v, project, workspace)
 		v = config.ExpandPasswords(v, globalCfg.SecretKey, project, workspace)
+		v = config.ExpandAppKey(v, globalCfg.SecretKey, project, workspace)
 		defaults[k] = v
 	}
 

@@ -116,6 +116,7 @@ func shellSingleQuote(s string) string {
 
 func (s *laravelScaffold) DefaultEnv(hostname string, globalCfg config.GlobalConfig) map[string]string {
 	return map[string]string{
+		"APP_KEY":             "{{GEN_APP_KEY}}",
 		"APP_URL":             globalCfg.WorkspaceURL(hostname),
 		"DB_CONNECTION":       "mysql",
 		"DB_HOST":             "mysql",

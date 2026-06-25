@@ -585,3 +585,79 @@ func hasGitignoreLine(content, want string) bool {
 	}
 	return false
 }
+
+func composeFor(t *testing.T, mainRoot string) string {
+	t.Helper()
+	ws := t.TempDir()
+	if err := Generate(ws, mainRoot, config.ProjectConfig{Scaffold: "laravel"}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(ws, ".slate", "compose.yaml"))
+	if err != nil {
+		t.Fatalf("reading compose.yaml: %v", err)
+	}
+	return string(data)
+}
+
+func TestGenerateOmitsEnvMountWithoutRootEnv(t *testing.T) {
+	out := composeFor(t, t.TempDir()) // mainRoot has no .env
+	if strings.Contains(out, "/run/main-env/.env") {
+		t.Errorf("env mount must be omitted when root .env is absent (Docker would create it as a dir):\n%s", out)
+	}
+}
+
+func TestGenerateOmitsEnvMountWhenRootEnvIsDir(t *testing.T) {
+	mainRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(mainRoot, ".env"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out := composeFor(t, mainRoot); strings.Contains(out, "/run/main-env/.env") {
+		t.Errorf("a leftover .env directory must count as absent:\n%s", out)
+	}
+}
+
+func TestGenerateIncludesEnvMountWithRootEnv(t *testing.T) {
+	mainRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mainRoot, ".env"), []byte("APP_NAME=hydra\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out := composeFor(t, mainRoot); !strings.Contains(out, "/run/main-env/.env") {
+		t.Errorf("env mount must be present when root .env exists:\n%s", out)
+	}
+}
+
+func envContainerFor(t *testing.T, mainRoot string) string {
+	t.Helper()
+	ws := t.TempDir()
+	g := config.WithPorts(80, 443, true)
+	g.SecretKey = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	cfg := config.ProjectConfig{Scaffold: "laravel"}
+	if err := GenerateEnvContainer(ws, mainRoot, "hydra--feat", "hydra", "feat", cfg, g); err != nil {
+		t.Fatalf("GenerateEnvContainer: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(ws, ".env.container"))
+	if err != nil {
+		t.Fatalf("reading .env.container: %v", err)
+	}
+	return string(data)
+}
+
+func TestGenerateEnvContainerDerivesAppKeyWithoutRootEnv(t *testing.T) {
+	out := envContainerFor(t, t.TempDir()) // no root .env
+	if !strings.Contains(out, "APP_KEY=base64:") {
+		t.Errorf("a stable APP_KEY must be generated when the project has no root .env:\n%s", out)
+	}
+	if strings.Contains(out, "{{GEN_APP_KEY}}") {
+		t.Errorf("APP_KEY placeholder left unexpanded:\n%s", out)
+	}
+}
+
+func TestGenerateEnvContainerKeepsProjectAppKey(t *testing.T) {
+	mainRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mainRoot, ".env"), []byte("APP_KEY=base64:realprojectkey\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out := envContainerFor(t, mainRoot); strings.Contains(out, "APP_KEY=") {
+		t.Errorf(".env.container must not override the project's own APP_KEY:\n%s", out)
+	}
+}

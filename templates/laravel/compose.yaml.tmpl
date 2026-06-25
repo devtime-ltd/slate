@@ -11,7 +11,9 @@ x-app-base: &app-base
     COMPOSER_HOME: /app/.slate/composer
   volumes:
     - ..:/app
+{{- if .HasMainEnv}}
     - ${MAIN_ROOT:?Run via slate}/.env:/run/main-env/.env:ro
+{{- end}}
     - ${MAIN_ROOT}/.git:${MAIN_ROOT}/.git:ro
     - ${SLATE_ENTRYPOINT:?Run via slate}:/usr/local/bin/entrypoint:ro
   depends_on:
@@ -60,7 +62,9 @@ services:
       - "5173"
     volumes:
       - ..:/app
+{{- if .HasMainEnv}}
       - ${MAIN_ROOT:?Run via slate}/.env:/run/main-env/.env:ro
+{{- end}}
       - ${MAIN_ROOT}/.git:${MAIN_ROOT}/.git:ro
       - ${SLATE_ENTRYPOINT:?Run via slate}:/usr/local/bin/entrypoint:ro
 

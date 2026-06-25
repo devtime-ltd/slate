@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"encoding/base64"
+	"strings"
+	"testing"
+)
 
 func TestGenerateSecretKey(t *testing.T) {
 	key1, err := GenerateSecretKey()
@@ -81,5 +85,39 @@ func TestExpandPasswordsNoPlaceholder(t *testing.T) {
 	result := ExpandPasswords("plain-value", "key", "proj", "ws")
 	if result != "plain-value" {
 		t.Errorf("should return input unchanged, got %q", result)
+	}
+}
+
+func TestDeriveAppKey(t *testing.T) {
+	key := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	got := DeriveAppKey(key, "proj", "ws")
+
+	if !strings.HasPrefix(got, "base64:") {
+		t.Fatalf("APP_KEY missing base64: prefix: %q", got)
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(got, "base64:"))
+	if err != nil {
+		t.Fatalf("APP_KEY not valid base64: %v", err)
+	}
+	if len(raw) != 32 {
+		t.Errorf("APP_KEY decodes to %d bytes, Laravel AES-256 needs 32", len(raw))
+	}
+	if other := DeriveAppKey(key, "proj", "other"); got == other {
+		t.Error("different workspaces should derive different keys")
+	}
+	if again := DeriveAppKey(key, "proj", "ws"); got != again {
+		t.Error("derivation must be stable for the same inputs")
+	}
+}
+
+func TestExpandAppKey(t *testing.T) {
+	key := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	result := ExpandAppKey("APP_KEY={{GEN_APP_KEY}}", key, "proj", "ws")
+	expected := "APP_KEY=" + DeriveAppKey(key, "proj", "ws")
+	if result != expected {
+		t.Errorf("got %q, want %q", result, expected)
+	}
+	if unchanged := ExpandAppKey("plain", key, "proj", "ws"); unchanged != "plain" {
+		t.Errorf("no placeholder should pass through, got %q", unchanged)
 	}
 }

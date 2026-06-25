@@ -99,7 +99,7 @@ func createWorkspace(name, branch string, bg, cd bool) error {
 	}
 
 	fmt.Println("Generating .slate/ and .env.container...")
-	if err := scaffold.Generate(wsDir, cfg); err != nil {
+	if err := scaffold.Generate(wsDir, mainRoot, cfg); err != nil {
 		return fmt.Errorf("generating scaffold: %w", err)
 	}
 	if s, err := scaffold.Get(cfg.Scaffold); err == nil {
@@ -107,7 +107,7 @@ func createWorkspace(name, branch string, bg, cd bool) error {
 			return fmt.Errorf("generating file mounts: %w", err)
 		}
 	}
-	if err := scaffold.GenerateEnvContainer(wsDir, hostname, projectName, name, cfg, proxyConfig); err != nil {
+	if err := scaffold.GenerateEnvContainer(wsDir, mainRoot, hostname, projectName, name, cfg, proxyConfig); err != nil {
 		return fmt.Errorf("generating .env.container: %w", err)
 	}
 	if err := scaffold.EnsureGitignore(mainRoot); err != nil {
