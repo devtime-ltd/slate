@@ -8,7 +8,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # required for npm provenance (OIDC)
+  id-token: write # trusted publishing + provenance (OIDC); no npm token needed
 
 jobs:
   publish:
@@ -23,6 +23,10 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
+      # Trusted publishing needs npm >= 11.5.1; node 22 ships npm 10.
+      - name: Update npm
+        run: npm install -g npm@latest
 
       - name: Test
         run: npm test
@@ -39,5 +43,3 @@ jobs:
 
       - name: Publish
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
