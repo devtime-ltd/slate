@@ -19,7 +19,9 @@ if [ -f /run/main-env/.env ] || [ -f /app/.env.container ]; then
             cat /app/.env.container
         fi
     } > "$TMP"
-    cp "$TMP" /app/.env
+    if ! cmp -s "$TMP" /app/.env; then
+        cp "$TMP" /app/.env
+    fi
     rm -f "$TMP"
 fi
 
