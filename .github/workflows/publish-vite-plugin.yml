@@ -8,7 +8,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # trusted publishing + provenance (OIDC); no npm token needed
+  id-token: write # trusted publishing via OIDC (no npm token). Provenance needs a public repo.
 
 jobs:
   publish:
@@ -42,4 +42,4 @@ jobs:
           fi
 
       - name: Publish
-        run: npm publish --access public --provenance
+        run: npm publish --access public
