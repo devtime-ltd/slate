@@ -1,6 +1,6 @@
 {
   "name": "@devtime-ltd/vite-plugin-slate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Vite plugin that wires the dev server to slate's HTTPS proxy.",
   "type": "module",
   "main": "index.js",

@@ -26,6 +26,16 @@ test("configures server from an https dev server url", () => {
   });
 });
 
+test("disables polling by default", () => {
+  process.env.VITE_DEV_SERVER_URL = "https://vite.app--feat.test";
+  assert.equal(slate().config().server.watch.usePolling, false);
+});
+
+test("poll: true re-enables polling", () => {
+  process.env.VITE_DEV_SERVER_URL = "https://vite.app--feat.test";
+  assert.equal(slate({ poll: true }).config().server.watch.usePolling, true);
+});
+
 test("honours a non-default https port", () => {
   process.env.VITE_DEV_SERVER_URL = "https://vite.app--feat.test:8443";
   assert.equal(slate().config().server.hmr.clientPort, 8443);

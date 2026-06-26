@@ -4,7 +4,14 @@
 // and rejects the proxied Host header with a 403. This points Vite at the proxy
 // URL and allows the host. No-op when the var is unset, so a plain `npm run dev`
 // outside slate is unaffected.
-export default function slate() {
+//
+// Options:
+//   poll  Force filesystem polling (server.watch.usePolling). Default false:
+//         slate's runtime (OrbStack) forwards native fs events into the
+//         container, so polling just burns a CPU core per workspace. Set true
+//         only if your Docker runtime doesn't forward events and HMR misses
+//         changes.
+export default function slate(options = {}) {
   return {
     name: "vite-plugin-slate",
     apply: "serve",
@@ -25,6 +32,9 @@ export default function slate() {
             host: url.hostname,
             protocol: secure ? "wss" : "ws",
             clientPort,
+          },
+          watch: {
+            usePolling: options.poll === true,
           },
         },
       };

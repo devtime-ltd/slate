@@ -48,11 +48,27 @@ server: {
   cors: true,                            // allow the cross-origin app host to load assets
   allowedHosts: ["vite.app--feat.test"], // accept the proxied Host header
   hmr: { host: "vite.app--feat.test", protocol: "wss", clientPort: 443 },
+  watch: { usePolling: false },          // native fs events; see below
 }
 ```
 
-These are merged into your existing `server` config, so options like
-`server.watch.usePolling` are preserved.
+These are merged into your existing `server` config.
+
+### Filesystem watching
+
+slate's runtime (OrbStack) forwards native filesystem events into the container,
+so Vite doesn't need to poll the worktree — and polling burns a full CPU core per
+workspace, which adds up fast when you run several projects at once. The plugin
+therefore disables polling under slate, **overriding** a `server.watch.usePolling: true`
+in your own config (which is typically a Docker Desktop workaround and unnecessary
+here).
+
+If your Docker runtime doesn't forward fs events and HMR stops noticing changes,
+opt back in:
+
+```js
+slate({ poll: true })
+```
 
 ## License
 
