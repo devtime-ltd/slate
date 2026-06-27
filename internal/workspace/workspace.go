@@ -3,6 +3,8 @@ package workspace
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -33,6 +35,21 @@ var mainRootOverride string
 
 func SetMainRootOverride(path string) {
 	mainRootOverride = path
+}
+
+// workspaceOverride is set from the --workspace/-w flag or SLATE_WORKSPACE env
+// var so commands can target a workspace without relying on the CWD.
+var workspaceOverride string
+
+func SetWorkspaceOverride(name string) {
+	workspaceOverride = name
+}
+
+// OverrideSet reports whether an explicit workspace override (--workspace/-w or
+// SLATE_WORKSPACE) is in effect, so callers can fail on a bad explicit target
+// instead of falling back to CWD detection or an interactive picker.
+func OverrideSet() bool {
+	return workspaceOverride != ""
 }
 
 func MainRoot() (string, error) {
@@ -78,7 +95,6 @@ func HostnameForProject(project, name string) string {
 	return project + "--" + name
 }
 
-
 func WorkspacesRoot() (string, error) {
 	root, err := MainRoot()
 	if err != nil {
@@ -111,6 +127,33 @@ func ResolveFromCwd() (string, string, error) {
 		return "", "", fmt.Errorf("not inside a slate workspace (pass <name> or cd into one)")
 	}
 	return filepath.Base(toplevel), toplevel, nil
+}
+
+// ResolveWorkspace resolves the target workspace from, in order of precedence:
+// an explicit override (--workspace/-w flag or SLATE_WORKSPACE env), then the
+// CWD. This lets cwd-independent callers (agents, CI) target a workspace.
+func ResolveWorkspace() (string, string, error) {
+	if workspaceOverride != "" {
+		if err := ValidateName(workspaceOverride); err != nil {
+			return "", "", err
+		}
+		dir, err := WorkspaceDir(workspaceOverride)
+		if err != nil {
+			return "", "", err
+		}
+		info, err := os.Stat(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "", "", fmt.Errorf("workspace '%s' not found", workspaceOverride)
+			}
+			return "", "", fmt.Errorf("checking workspace '%s': %w", workspaceOverride, err)
+		}
+		if !info.IsDir() {
+			return "", "", fmt.Errorf("workspace '%s' is not a directory", workspaceOverride)
+		}
+		return workspaceOverride, dir, nil
+	}
+	return ResolveFromCwd()
 }
 
 func CreateWorktree(dir, branch string) error {
@@ -149,7 +192,6 @@ func runGit(args ...string) (string, error) {
 	return buf.String(), err
 }
 
-
 func gitOutput(args ...string) (string, error) {
 	out, err := exec.Command("git", args...).Output()
 	if err != nil {
@@ -166,4 +208,90 @@ func gitOutputInDir(dir string, args ...string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// AdoptDirtyChanges carries uncommitted work from the main checkout into a
+// freshly-created worktree: tracked changes (staged + unstaged, relative to
+// HEAD) are applied as a patch, and untracked files are copied. The main
+// checkout is left untouched. Returns whether anything was adopted.
+func AdoptDirtyChanges(mainRoot, wsDir string) (bool, error) {
+	adopted := false
+
+	// --binary so a tracked binary change produces an applyable patch rather
+	// than a "Binary files differ" stub that `git apply` rejects.
+	patch, err := gitRawInDir(mainRoot, "diff", "--binary", "HEAD")
+	if err != nil {
+		return false, fmt.Errorf("git diff HEAD: %w", err)
+	}
+	if len(bytes.TrimSpace(patch)) > 0 {
+		if err := applyPatchInDir(wsDir, patch); err != nil {
+			return false, err
+		}
+		adopted = true
+	}
+
+	others, err := gitOutputInDir(mainRoot, "ls-files", "--others", "--exclude-standard")
+	if err == nil && strings.TrimSpace(others) != "" {
+		for _, rel := range strings.Split(strings.TrimSpace(others), "\n") {
+			// Skip empties and slate's own workspace tree, which shows as
+			// untracked on a project's first `slate new` (before .slate/ is
+			// gitignored) and would otherwise be copied into itself.
+			if rel == "" || rel == ".slate" || strings.HasPrefix(rel, ".slate/") {
+				continue
+			}
+			src := filepath.Join(mainRoot, rel)
+			// Regular files only — never follow a symlink, which would copy the
+			// target's contents (possibly from outside the repo) into the worktree.
+			if info, err := os.Lstat(src); err != nil || !info.Mode().IsRegular() {
+				fmt.Fprintf(os.Stderr, "  warning: skipping non-regular untracked file %s\n", rel)
+				continue
+			}
+			if err := copyFile(src, filepath.Join(wsDir, rel)); err != nil {
+				return adopted, fmt.Errorf("copying untracked %s: %w", rel, err)
+			}
+			adopted = true
+		}
+	}
+
+	return adopted, nil
+}
+
+func gitRawInDir(dir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd.Output()
+}
+
+func applyPatchInDir(dir string, patch []byte) error {
+	cmd := exec.Command("git", "apply", "--")
+	cmd.Dir = dir
+	cmd.Stdin = bytes.NewReader(patch)
+	var buf bytes.Buffer
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git apply: %s", strings.TrimSpace(buf.String()))
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	mode := os.FileMode(0o644)
+	if info, err := in.Stat(); err == nil {
+		mode = info.Mode()
+	}
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }

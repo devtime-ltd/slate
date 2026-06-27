@@ -34,14 +34,24 @@ var (
 
 func Execute() error {
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
-		if projectOverride == "" {
-			return nil
+		if projectOverride != "" {
+			path, err := resolveProjectPath(projectOverride)
+			if err != nil {
+				return err
+			}
+			workspace.SetMainRootOverride(path)
 		}
-		path, err := resolveProjectPath(projectOverride)
-		if err != nil {
-			return err
+
+		// Workspace target: --workspace/-w flag, else SLATE_WORKSPACE env.
+		// (Scaffold tools disable flag parsing, so they also strip a leading
+		// -w/--workspace from their args; the env var works everywhere.)
+		ws := workspaceFlag
+		if ws == "" {
+			ws = os.Getenv("SLATE_WORKSPACE")
 		}
-		workspace.SetMainRootOverride(path)
+		if ws != "" {
+			workspace.SetWorkspaceOverride(ws)
+		}
 		return nil
 	}
 
@@ -65,6 +75,7 @@ func resolveProjectPath(nameOrPath string) (string, error) {
 func init() {
 	rootCmd.AddGroup(groupWorkspace, groupTools, groupScaffold)
 	rootCmd.PersistentFlags().StringVar(&projectOverride, "project", "", "Target a specific project (name from registry or absolute path)")
+	rootCmd.PersistentFlags().StringVarP(&workspaceFlag, "workspace", "w", "", "Target a workspace by name instead of the CWD (or set SLATE_WORKSPACE)")
 
 	doctorCmd.GroupID = "tools"
 	initCmd.GroupID = "tools"
@@ -74,3 +85,4 @@ func init() {
 }
 
 var projectOverride string
+var workspaceFlag string

@@ -16,13 +16,30 @@ import (
 )
 
 // resolveAutoCd returns the explicit flag value if the user passed --cd /
-// --cd=false, or the global config's auto_cd default otherwise.
+// --cd=false. Otherwise it falls back to the global config's auto_cd default,
+// but never auto-spawns a shell when stdio isn't an interactive terminal (so
+// agents, CI, and piped invocations don't block).
 func resolveAutoCd(cmd *cobra.Command, flagName string, flagVal bool) bool {
 	if cmd.Flags().Changed(flagName) {
 		return flagVal
 	}
+	if !isInteractiveTerminal() {
+		return false
+	}
 	cfg, _ := config.LoadGlobal()
 	return cfg.AutoCd
+}
+
+// isInteractiveTerminal reports whether both stdin and stdout are character
+// devices (i.e. a real TTY), rather than pipes or files.
+func isInteractiveTerminal() bool {
+	for _, f := range []*os.File{os.Stdin, os.Stdout} {
+		info, err := f.Stat()
+		if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // provisionOpts captures the variations between fresh-workspace creation,

@@ -20,8 +20,13 @@ func resolveWorkspaceArg(args []string) (string, error) {
 	if len(args) > 0 {
 		return args[0], nil
 	}
-	if name, _, err := workspace.ResolveFromCwd(); err == nil {
+	name, _, err := workspace.ResolveWorkspace()
+	if err == nil {
 		return name, nil
+	}
+	// Fail on a bad explicit -w/SLATE_WORKSPACE target instead of prompting.
+	if workspace.OverrideSet() {
+		return "", err
 	}
 	return pickWorkspace()
 }

@@ -54,7 +54,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
 			if answer == "" || answer == "y" {
-				return createWorkspace(args[0], "", upBg, cd)
+				return createWorkspace(args[0], "", upBg, cd, false)
 			}
 			return fmt.Errorf("workspace '%s' not found", args[0])
 		}
@@ -130,10 +130,16 @@ func resolveNameOrCwd(args []string) (string, string, error) {
 		}
 		return name, dir, nil
 	}
-	if name, dir, err := workspace.ResolveFromCwd(); err == nil {
-		return name, dir, nil
+	wsName, wsDir, err := workspace.ResolveWorkspace()
+	if err == nil {
+		return wsName, wsDir, nil
 	}
-	// CWD isn't a workspace; prompt the user to pick from the project.
+	// An explicit -w/SLATE_WORKSPACE target that fails must error rather than
+	// fall back to the picker (which would prompt or hang in scripts).
+	if workspace.OverrideSet() {
+		return "", "", err
+	}
+	// CWD isn't a workspace; prompt the user to pick.
 	name, err := pickWorkspace()
 	if err != nil {
 		return "", "", err

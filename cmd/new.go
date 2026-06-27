@@ -16,6 +16,7 @@ import (
 var newBranch string
 var newBg bool
 var newCd bool
+var newAdopt bool
 
 var newCmd = &cobra.Command{
 	Use:   "new <name>",
@@ -29,15 +30,16 @@ func init() {
 	newCmd.Flags().StringVarP(&newBranch, "branch", "b", "", "Git branch name (default: slate/<name>)")
 	newCmd.Flags().BoolVar(&newBg, "bg", false, "Run container build + lifecycle in the background")
 	newCmd.Flags().BoolVar(&newCd, "cd", false, "Spawn a shell in the workspace directory (default from global auto_cd; pass --cd=false to opt out)")
+	newCmd.Flags().BoolVar(&newAdopt, "adopt", false, "Carry uncommitted changes from the main checkout into the new worktree")
 	newCmd.GroupID = "workspace"
 	rootCmd.AddCommand(newCmd)
 }
 
 func runNew(cmd *cobra.Command, args []string) error {
-	return createWorkspace(args[0], newBranch, newBg, resolveAutoCd(cmd, "cd", newCd))
+	return createWorkspace(args[0], newBranch, newBg, resolveAutoCd(cmd, "cd", newCd), newAdopt)
 }
 
-func createWorkspace(name, branch string, bg, cd bool) error {
+func createWorkspace(name, branch string, bg, cd, adopt bool) error {
 	if err := requireDocker(); err != nil {
 		return err
 	}
@@ -87,6 +89,16 @@ func createWorkspace(name, branch string, bg, cd bool) error {
 		return fmt.Errorf("git worktree add failed: %w", err)
 	}
 
+	if adopt {
+		if changed, err := workspace.AdoptDirtyChanges(mainRoot, wsDir); err != nil {
+			fmt.Printf("  warning: could not adopt uncommitted changes: %v\n", err)
+		} else if changed {
+			fmt.Println("Adopted uncommitted changes from the main checkout (left intact there).")
+		} else {
+			fmt.Println("No uncommitted changes to adopt.")
+		}
+	}
+
 	projectName, err := workspace.ProjectName(cfg.Project)
 	if err != nil {
 		return err
@@ -125,7 +137,7 @@ func createWorkspace(name, branch string, bg, cd bool) error {
 		return err
 	}
 	if err := runWorkspaceLifecycle(env, name, wsDir, hostname, cfg, proxyConfig, opts); err != nil {
-		return err
+		return fmt.Errorf("%w\n\nThe worktree is intact — resume provisioning with:\n  slate up %s", err, name)
 	}
 
 	if cd {

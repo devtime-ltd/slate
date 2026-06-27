@@ -258,7 +258,6 @@ func expandDBName(value, project, workspace string) string {
 	})
 }
 
-
 func DeriveDBName(project, workspace, label string) string {
 	ws := sanitiseDBSegment(workspace, 18)
 	hash := shortHash(project, workspace, label)
@@ -426,9 +425,26 @@ func BuildLifecycleScript(cfg config.ProjectConfig, isNew bool) string {
 		return ""
 	}
 
-	script := "set -e\n"
+	script := "set -e\n" + retryShellFunc
 	for _, p := range parts {
 		script += strings.TrimRight(p, "\n") + "\n"
 	}
 	return script
 }
+
+// retryShellFunc defines a `retry` shell helper available to every lifecycle
+// script: it runs a command up to 3 times with linear backoff, so transient
+// network blips (e.g. flaky codeload.github.com 400s during composer/npm
+// install) don't fail the whole provision. The final attempt runs bare so its
+// exit status propagates under `set -e`.
+const retryShellFunc = `retry() {
+  n=1
+  while [ "$n" -lt 3 ]; do
+    "$@" && return 0
+    echo "slate: '$1' failed (attempt $n/3); retrying in $((n*3))s..." >&2
+    sleep $((n*3))
+    n=$((n+1))
+  done
+  "$@"
+}
+`
