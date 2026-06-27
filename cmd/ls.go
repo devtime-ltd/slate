@@ -9,9 +9,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/devtime-ltd/slate/internal/compose"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
+	"github.com/devtime-ltd/slate/internal/compose"
 	"github.com/devtime-ltd/slate/internal/config"
 	"github.com/devtime-ltd/slate/internal/workspace"
 	"github.com/spf13/cobra"

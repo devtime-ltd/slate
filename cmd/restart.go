@@ -56,7 +56,6 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-
 	if len(args) > 1 {
 		service := args[1]
 		fmt.Printf("Restarting %s in %s...\n", service, hostname)

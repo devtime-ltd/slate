@@ -108,7 +108,7 @@ func renderPHPIniDrop(filename string, values map[string]string) string {
 }
 
 // shellSingleQuote wraps s in single quotes, escaping any embedded single
-// quotes via the standard '\'' idiom. Safe to pass any string through as
+// quotes via the standard '\” idiom. Safe to pass any string through as
 // a single shell-word argument.
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"

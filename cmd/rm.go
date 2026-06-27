@@ -91,7 +91,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 
 	workspace.RemoveWorktree(wsDir)
 
-	fmt.Printf("" + tick() + " %s removed\n", hostname)
+	fmt.Printf(""+tick()+" %s removed\n", hostname)
 
 	if cwdInside && mainRoot != "" {
 		fmt.Printf("Your cwd was destroyed; dropping into a shell at %q (exit to return).\n", mainRoot)
