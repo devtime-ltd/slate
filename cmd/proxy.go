@@ -102,7 +102,7 @@ func runProxyStart(cmd *cobra.Command, args []string) error {
 				if len(parts) > 0 {
 					process = parts[0]
 				}
-				fmt.Printf("" + warn() + " Port %d is in use by %s.\n", p, process)
+				fmt.Printf(""+warn()+" Port %d is in use by %s.\n", p, process)
 				fmt.Printf("   Stop it first, or configure ports in ~/.config/slate/config.yml\n")
 				return fmt.Errorf("port %d is already in use", p)
 			}
@@ -164,10 +164,10 @@ func runProxyStart(cmd *cobra.Command, args []string) error {
 			initProxyServer(useTLS)
 
 			if useTLS {
-				fmt.Printf("\n" + tick() + " Proxy running (HTTP %d, HTTPS %d)\n", httpPort, httpsPort)
+				fmt.Printf("\n"+tick()+" Proxy running (HTTP %d, HTTPS %d)\n", httpPort, httpsPort)
 				fmt.Println("   Run `slate proxy trust` to install the CA certificate.")
 			} else {
-				fmt.Printf("\n" + tick() + " Proxy running (HTTP %d)\n", httpPort)
+				fmt.Printf("\n"+tick()+" Proxy running (HTTP %d)\n", httpPort)
 			}
 			fmt.Println("   Admin API: http://127.0.0.1:2019")
 			return nil

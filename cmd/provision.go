@@ -156,4 +156,3 @@ func spawnShellAt(dir string) error {
 	}
 	return nil
 }
-

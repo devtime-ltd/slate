@@ -24,9 +24,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	check := func(ok bool, label string) {
 		if ok {
-			fmt.Printf("  " + tick() + " %s\n", label)
+			fmt.Printf("  "+tick()+" %s\n", label)
 		} else {
-			fmt.Printf("  " + cross() + " %s\n", label)
+			fmt.Printf("  "+cross()+" %s\n", label)
 			allOK = false
 		}
 	}
@@ -74,7 +74,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 			label += " (will be used)"
 			proxyFound = true
 		}
-		fmt.Printf("  " + tick() + " %s\n", label)
+		fmt.Printf("  "+tick()+" %s\n", label)
 	}
 	if !proxyFound {
 		check(false, "no HTTPS proxy. Run `slate proxy start` or install Caddy/Herd.")

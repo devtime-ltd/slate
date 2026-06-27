@@ -68,7 +68,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 	fmt.Println()
 	if err := runProxyTrust(cmd, args); err != nil {
-		fmt.Printf("  " + warn() + " CA trust failed: %v\n", err)
+		fmt.Printf("  "+warn()+" CA trust failed: %v\n", err)
 		fmt.Println("  Run `slate proxy trust` manually if needed.")
 	}
 

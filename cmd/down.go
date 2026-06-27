@@ -48,6 +48,6 @@ func runDown(cmd *cobra.Command, args []string) error {
 	cfg, _ := config.LoadProject(mainRoot)
 	proxy.Unregister(hostname, scaffoldSubdomains(cfg))
 
-	fmt.Printf("" + tick() + " %s is down\n", hostname)
+	fmt.Printf(""+tick()+" %s is down\n", hostname)
 	return nil
 }
