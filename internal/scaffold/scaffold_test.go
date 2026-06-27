@@ -26,6 +26,18 @@ func TestBuildLifecycleScriptUpOnly(t *testing.T) {
 	}
 }
 
+func TestBuildLifecycleScriptRetry(t *testing.T) {
+	cfg := config.ProjectConfig{Scaffold: "laravel"}
+	script := BuildLifecycleScript(cfg, false)
+
+	if !strings.Contains(script, "retry() {") {
+		t.Error("script should define the retry shell helper")
+	}
+	if !strings.Contains(script, "retry composer install") {
+		t.Error("composer install should be wrapped in retry")
+	}
+}
+
 func TestBuildLifecycleScriptNewThenUp(t *testing.T) {
 	cfg := config.ProjectConfig{Scaffold: "laravel"}
 	script := BuildLifecycleScript(cfg, true)
@@ -51,7 +63,7 @@ func TestBuildLifecycleScriptNewThenUp(t *testing.T) {
 func TestBuildLifecycleScriptScaffoldPlaceholder(t *testing.T) {
 	cfg := config.ProjectConfig{
 		Scaffold: "laravel",
-		Up: "echo before\n{{SCAFFOLD_DEFAULT}}\necho after\n",
+		Up:       "echo before\n{{SCAFFOLD_DEFAULT}}\necho after\n",
 	}
 	script := BuildLifecycleScript(cfg, false)
 
@@ -508,17 +520,17 @@ func newWorkspaceWithSourceFile(t *testing.T, content string) (string, string) {
 
 type nullScaffold struct{}
 
-func (nullScaffold) Name() string                                                    { return "null" }
-func (nullScaffold) FS() embed.FS                                                    { return embed.FS{} }
-func (nullScaffold) FileMap(string) map[string]string                                { return nil }
+func (nullScaffold) Name() string                     { return "null" }
+func (nullScaffold) FS() embed.FS                     { return embed.FS{} }
+func (nullScaffold) FileMap(string) map[string]string { return nil }
 func (nullScaffold) RenderDockerfile(c string, _ config.ProjectConfig) (string, error) {
 	return c, nil
 }
-func (nullScaffold) DefaultFiles() map[string]string                              { return nil }
-func (nullScaffold) DefaultEnv(string, config.GlobalConfig) map[string]string     { return nil }
-func (nullScaffold) Tools() map[string]config.Tool                                { return nil }
-func (nullScaffold) Subdomains() map[string]Subdomain                             { return nil }
-func (nullScaffold) AppLikeServices() []string                                    { return []string{"app", "queue"} }
+func (nullScaffold) DefaultFiles() map[string]string                          { return nil }
+func (nullScaffold) DefaultEnv(string, config.GlobalConfig) map[string]string { return nil }
+func (nullScaffold) Tools() map[string]config.Tool                            { return nil }
+func (nullScaffold) Subdomains() map[string]Subdomain                         { return nil }
+func (nullScaffold) AppLikeServices() []string                                { return []string{"app", "queue"} }
 
 type appOnlyScaffold struct{ nullScaffold }
 

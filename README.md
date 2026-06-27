@@ -78,13 +78,16 @@ Scaffold tools (from slate.yml):
 
 Omit the workspace name on any command that takes one and slate first checks your current directory (if you're inside a workspace, it's used) and otherwise pops an interactive picker over the project's workspaces.
 
+To target a workspace explicitly — useful from outside any worktree, or in non-interactive contexts like scripts, CI, and agents — set `SLATE_WORKSPACE=<name>` (honoured by every command, including the scaffold tools) or pass `-w/--workspace <name>` to the lifecycle/utility commands. Examples: `SLATE_WORKSPACE=api slate artisan migrate`, `slate -w api logs`, `slate -w api down`. The scaffold tools (`artisan`, `composer`, `npm`, …) pass **every** argument straight through to the tool — including the tool's own `-w` (e.g. npm workspaces) — so target those with `SLATE_WORKSPACE`, not `-w`.
+
 Add `--project <name>` to any command to target a project other than the current directory's. The project name comes from the registry (`slate ls --all`).
 
 ### Useful flags
 
 - `slate new <name> -b <branch>`: custom branch name (default: `slate/<name>`).
 - `slate new <name> --bg`: fork the slow phase (build + lifecycle) to the background; the fast phase (worktree + scaffold) runs inline so editing can start immediately. Progress is captured in `.slate/workspaces/<name>/.slate/provision.log` and surfaced as `provisioning` in `slate ls` (red `failed` if it errors). While a bg provision is in flight, `slate up` and `slate restart` refuse to touch the workspace; `slate rm` aborts it as an escape hatch.
-- `slate new <name> --cd` / `--cd=false`: explicitly opt in or out of dropping into a shell at the new workspace. Default comes from `auto_cd` in `~/.config/slate/config.yml` (defaults to `true`). With `--bg` the shell is spawned immediately; without, after provisioning finishes.
+- `slate new <name> --cd` / `--cd=false`: explicitly opt in or out of dropping into a shell at the new workspace. Default comes from `auto_cd` in `~/.config/slate/config.yml` (defaults to `true`), but is suppressed automatically when stdio isn't an interactive terminal (so scripts/CI/agents never block on a spawned shell). With `--bg` the shell is spawned immediately; without, after provisioning finishes.
+- `slate new <name> --adopt`: carry your uncommitted changes from the main checkout into the new worktree — tracked changes are patched in, untracked files copied. The main checkout is left untouched. Handy when you started editing on `main` and want to move that work into a workspace.
 - `slate up [name] --fresh`: recreate containers + volumes (worktree code preserved) and run the new-workspace lifecycle.
 - `slate up [name] --build`: force image rebuild.
 - `slate rm [name]`: warns if the worktree has uncommitted changes (`3 modified, 1 untracked`) before asking for confirmation; `-f` skips the prompt but still warns to stderr. If your shell's cwd was inside the workspace being destroyed, slate drops you into a sub-shell at the project's main checkout afterwards (type `exit` to return).
@@ -105,6 +108,8 @@ Host                          Containers (per workspace)
 ```
 
 Source code is bind-mounted from the host. Package installs (`composer install`, `npm install`) run inside containers so compromised dependencies can't access your SSH keys, cloud credentials, or browser password stores. Dependency caches live inside each workspace at `.slate/composer/` and `.slate/npm-cache/`.
+
+Install steps in the default lifecycle run through a `retry` helper (3 attempts, linear backoff) so transient registry / `codeload.github.com` blips don't fail the whole provision. For private packages — or to dodge GitHub's unauthenticated rate-limit `400`s entirely — mount a Composer `auth.json` with a token via the `files:` config (see [Customisation](#customisation)).
 
 On first `slate new`, slate appends `.slate/workspaces/` to your project's `.gitignore` so workspace worktrees don't pollute the main checkout's status.
 
@@ -154,6 +159,7 @@ Lifecycle hooks:
 - **`up`**: runs on every `slate new` and `slate up` (default: install deps + migrate)
 - **`new`**: runs on `slate new` only, after `up` (default: fresh DB seed)
 - Use `{{SCAFFOLD_DEFAULT}}` to inject the scaffold's defaults at any point in your override
+- A `retry <cmd>` shell helper is available inside hooks (3 attempts, linear backoff) — wrap any flaky network step, e.g. `retry composer install`
 
 Placeholders (expanded at workspace creation):
 - `{{SCAFFOLD_DEFAULT}}`: scaffold's default script (lifecycle hooks only)

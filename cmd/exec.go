@@ -43,14 +43,26 @@ var logsCmd = &cobra.Command{
 		var err error
 		var service string
 
-		switch len(args) {
-		case 0:
-			name, wsDir, err = workspace.ResolveFromCwd()
-		case 1:
-			name, wsDir, err = resolveNameOrCwd(args[:1])
-		case 2:
-			name, wsDir, err = resolveNameOrCwd(args[:1])
-			service = args[1]
+		if workspace.OverrideSet() {
+			// -w/SLATE_WORKSPACE already selects the workspace, so a positional
+			// is the service name, not the workspace.
+			if len(args) > 1 {
+				return fmt.Errorf("too many arguments: slate logs [service]")
+			}
+			if len(args) == 1 {
+				service = args[0]
+			}
+			name, wsDir, err = workspace.ResolveWorkspace()
+		} else {
+			switch len(args) {
+			case 0:
+				name, wsDir, err = workspace.ResolveWorkspace()
+			case 1:
+				name, wsDir, err = resolveNameOrCwd(args[:1])
+			case 2:
+				name, wsDir, err = resolveNameOrCwd(args[:1])
+				service = args[1]
+			}
 		}
 		if err != nil {
 			return err
@@ -70,7 +82,6 @@ var logsCmd = &cobra.Command{
 		return compose.Run(env, "logs", "-f")
 	},
 }
-
 
 // requireWorkspaceName now accepts 0 or 1 workspace names. When 0 are passed,
 // commands using this validator call resolveWorkspaceArg(args) to prompt
@@ -119,7 +130,12 @@ func registerExecCommand(name string, t config.ExecTool) {
 		GroupID:            "scaffold",
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			wsName, wsDir, err := workspace.ResolveFromCwd()
+			// Flag parsing is disabled so every arg passes straight through to
+			// the tool — including the tool's own -w/--workspace (e.g. npm
+			// workspaces). Select a Slate workspace before the tool name
+			// (`slate -w api artisan …`) or via SLATE_WORKSPACE; both are
+			// applied in PersistentPreRunE.
+			wsName, wsDir, err := workspace.ResolveWorkspace()
 			if err != nil {
 				return err
 			}
