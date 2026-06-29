@@ -10,10 +10,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN if [ "${APP_GID}" != "1000" ]; then groupmod -g ${APP_GID} node; fi \
     && if [ "${APP_UID}" != "1000" ]; then usermod -u ${APP_UID} node; fi
 
+RUN corepack enable
+
 WORKDIR /app
 
 USER node
 
 EXPOSE 3000
 
-CMD ["npm", "run", "dev", "--", "-H", "0.0.0.0"]
+CMD ["sh", "-c", "if [ -f yarn.lock ]; then exec yarn dev -H 0.0.0.0; else exec npm run dev -- -H 0.0.0.0; fi"]

@@ -50,6 +50,7 @@ func (s *nextjsScaffold) AppLikeServices() []string { return []string{"app"} }
 
 func (s *nextjsScaffold) Tools() map[string]config.Tool {
 	return map[string]config.Tool{
+		"yarn":   config.ExecTool{Service: "app", Command: []string{"yarn"}},
 		"npm":    config.ExecTool{Service: "app", Command: []string{"npm"}},
 		"npx":    config.ExecTool{Service: "app", Command: []string{"npx"}},
 		"prisma": config.ExecTool{Service: "app", Command: []string{"npx", "prisma"}},
