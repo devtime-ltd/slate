@@ -7,7 +7,7 @@ services:
         APP_UID: ${APP_UID:-1000}
         APP_GID: ${APP_GID:-1000}
     entrypoint: ["sh", "/usr/local/bin/entrypoint"]
-    command: ["sh", "-c", "npm install && exec npm run dev -- -H 0.0.0.0"]
+    command: ["sh", "-c", "if [ -f yarn.lock ]; then yarn install && exec yarn dev -H 0.0.0.0; else npm install && exec npm run dev -- -H 0.0.0.0; fi"]
     ports:
       - "3000"
     environment:
@@ -21,6 +21,7 @@ services:
       - ${SLATE_ENTRYPOINT:?Run via slate}:/usr/local/bin/entrypoint:ro
     env_file:
       - ../.env.container
+{{- if eq .Database "postgres"}}
 
   postgres:
     image: postgres:17
@@ -37,12 +38,15 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+{{- end}}
 
   mailpit:
     image: axllent/mailpit:latest
     ports:
       - "8025"
       - "1025"
+{{- if eq .Database "postgres"}}
 
 volumes:
   postgres_data:
+{{- end}}

@@ -46,6 +46,7 @@ func (DBTool) isTool() {}
 type ProjectConfig struct {
 	Scaffold string              `yaml:"scaffold"`
 	Project  string              `yaml:"project"`
+	Database string              `yaml:"database"`
 	Editor   string              `yaml:"editor"`
 	New      string              `yaml:"new"`
 	Up       string              `yaml:"up"`
@@ -127,9 +128,8 @@ grep -q '^APP_KEY=base64:' .env || php artisan key:generate --ansi
 php artisan migrate --force
 `
 	case "nextjs":
-		return `retry npm install
-npx prisma migrate deploy 2>/dev/null || true
-`
+		// deps install via the app container command; DB is opt-in
+		return ""
 	default:
 		return ""
 	}
@@ -141,9 +141,7 @@ func DefaultFreshSetupForScaffold(scaffold string) string {
 		return `php artisan migrate:fresh --seed --force
 `
 	case "nextjs":
-		return `npx prisma migrate reset --force 2>/dev/null || true
-npx prisma db seed 2>/dev/null || true
-`
+		return ""
 	default:
 		return ""
 	}

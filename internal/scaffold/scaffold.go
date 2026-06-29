@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -97,7 +98,7 @@ func Generate(workspaceDir, mainRoot string, cfg config.ProjectConfig) error {
 		}
 
 		if entry.Name() == "compose.yaml.tmpl" {
-			content, err = renderCompose(content, mainRoot)
+			content, err = renderCompose(content, mainRoot, cfg)
 			if err != nil {
 				return fmt.Errorf("rendering compose.yaml: %w", err)
 			}
@@ -115,7 +116,7 @@ func Generate(workspaceDir, mainRoot string, cfg config.ProjectConfig) error {
 // has no real .env file, otherwise Docker silently creates the missing source
 // as a directory in the user's project. A directory at that path counts as
 // absent so a leftover one is never re-mounted.
-func renderCompose(content, mainRoot string) (string, error) {
+func renderCompose(content, mainRoot string, cfg config.ProjectConfig) (string, error) {
 	hasMainEnv := false
 	if mainRoot != "" {
 		if info, err := os.Stat(filepath.Join(mainRoot, ".env")); err == nil && !info.IsDir() {
@@ -128,7 +129,10 @@ func renderCompose(content, mainRoot string) (string, error) {
 		return "", err
 	}
 	var b strings.Builder
-	if err := tmpl.Execute(&b, map[string]any{"HasMainEnv": hasMainEnv}); err != nil {
+	if err := tmpl.Execute(&b, map[string]any{
+		"HasMainEnv": hasMainEnv,
+		"Database":   cfg.Database,
+	}); err != nil {
 		return "", err
 	}
 	return b.String(), nil
@@ -319,10 +323,10 @@ func EnsureGitignore(projectDir string) error {
 	// and otherwise shows up as an untracked file (and trips the `slate rm`
 	// uncommitted-changes warning) on every workspace.
 	var missing []string
-	if !have[".slate"] && !have[".slate/"] {
+	if !have[".slate"] && !have[".slate/"] && !gitIgnored(projectDir, ".slate/") {
 		missing = append(missing, ".slate/")
 	}
-	if !have[".env.container"] {
+	if !have[".env.container"] && !gitIgnored(projectDir, ".env.container") {
 		missing = append(missing, ".env.container")
 	}
 	if len(missing) == 0 {
@@ -346,6 +350,11 @@ func EnsureGitignore(projectDir string) error {
 		}
 	}
 	return nil
+}
+
+// gitIgnored reports whether git already ignores path (any ignore source).
+func gitIgnored(dir, path string) bool {
+	return exec.Command("git", "-C", dir, "check-ignore", "-q", path).Run() == nil
 }
 
 func GenerateEnvContainer(workspaceDir, mainRoot, hostname, project, workspace string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) error {
