@@ -90,7 +90,14 @@ func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg co
 		}
 	}
 
-	_ = compose.Run(env, "restart", "queue")
+	// Restart worker services (app-like beyond the primary); they don't hot-reload.
+	if s, err := scaffold.Get(cfg.Scaffold); err == nil {
+		if appLike := s.AppLikeServices(); len(appLike) > 1 {
+			for _, svc := range appLike[1:] {
+				_ = compose.Run(env, "restart", svc)
+			}
+		}
+	}
 
 	services := buildServicePorts(env, cfg)
 	if err := proxy.Register(hostname, services); err != nil {
