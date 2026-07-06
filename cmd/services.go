@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/devtime-ltd/slate/internal/assets"
 	"github.com/devtime-ltd/slate/internal/compose"
 	"github.com/devtime-ltd/slate/internal/config"
 	"github.com/devtime-ltd/slate/internal/proxy"
@@ -72,6 +73,13 @@ func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg co
 		if err := compose.Run(env, "down", "-v"); err != nil {
 			return fmt.Errorf("compose down failed: %w", err)
 		}
+	}
+
+	// Keep the container entrypoint in sync with this binary before starting, so
+	// a slate upgrade that changes it takes effect on the next `up` rather than
+	// only after a `slate setup`. It's mounted read-only into the containers.
+	if _, err := assets.EnsureEntrypoint(); err != nil {
+		return fmt.Errorf("installing entrypoint: %w", err)
 	}
 
 	fmt.Printf("Starting containers for %s...\n", hostname)
