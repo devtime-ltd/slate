@@ -74,10 +74,15 @@ func runProvision(cmd *cobra.Command, args []string) error {
 }
 
 // runBackgroundProvision forks the bg provisioner and then either drops into
-// a shell at the workspace dir (cd=true) or prints the path and exits.
-func runBackgroundProvision(name, wsDir string, opts provisionOpts, cd bool) error {
+// a shell at the workspace dir (cd=true) or prints the path and exits. Always
+// a plain shell, never the agent: the containers are still provisioning, so
+// there is nothing to exec into yet.
+func runBackgroundProvision(cfg config.ProjectConfig, name, wsDir string, opts provisionOpts, cd bool) error {
 	if err := detachProvision(name, wsDir, opts); err != nil {
 		return err
+	}
+	if landing := cfg.ResolvedLanding(); landing == "agent" || landing == "agent+shell" {
+		fmt.Println("Run `slate agent` once provisioning completes.")
 	}
 	if cd {
 		return spawnShellAt(wsDir)

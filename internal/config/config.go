@@ -54,7 +54,27 @@ type ProjectConfig struct {
 	AppPort  int                 `yaml:"app_port"`
 	VitePort int                 `yaml:"vite_port"`
 	Tools    map[string]ExecTool `yaml:"tools"`
+	Agent    string              `yaml:"agent"`
+	Landing  string              `yaml:"landing"`
 	Extra    map[string]any      `yaml:",inline"`
+}
+
+func (c ProjectConfig) AgentEnabled() bool {
+	return c.Agent != "" && c.Agent != "none"
+}
+
+// ResolvedLanding is what `slate new`/`up` drop into after provisioning
+// (when the auto_cd/--cd gate allows dropping in at all): "shell", "agent",
+// "agent+shell", or "none". Enabling an agent flips the default from a plain
+// shell to agent-then-shell.
+func (c ProjectConfig) ResolvedLanding() string {
+	if c.Landing != "" {
+		return c.Landing
+	}
+	if c.AgentEnabled() {
+		return "agent+shell"
+	}
+	return "shell"
 }
 
 func (c ProjectConfig) StringMap(key string) map[string]string {
@@ -231,5 +251,26 @@ func LoadProject(dir string) (ProjectConfig, error) {
 	if cfg.VitePort == 0 {
 		cfg.VitePort = 5173
 	}
+	switch cfg.Agent {
+	case "", "none", "claude":
+	default:
+		return cfg, fmt.Errorf("slate.yml: unsupported agent %q (supported: claude)", cfg.Agent)
+	}
+	switch cfg.Landing {
+	case "", "shell", "agent", "agent+shell", "none":
+	default:
+		return cfg, fmt.Errorf("slate.yml: invalid landing %q (valid: shell, agent, agent+shell, none)", cfg.Landing)
+	}
+	if (cfg.Landing == "agent" || cfg.Landing == "agent+shell") && !cfg.AgentEnabled() {
+		return cfg, fmt.Errorf("slate.yml: landing %q requires an agent (add `agent: claude`)", cfg.Landing)
+	}
 	return cfg, nil
+}
+
+// AgentClaudeDir is the host-side Claude home shared by every workspace's
+// in-container agent (bind-mounted as CLAUDE_CONFIG_DIR). Credentials and
+// settings live here once, per slate installation; per-workspace session
+// history is overlaid separately by GenerateAgentMounts.
+func AgentClaudeDir() string {
+	return filepath.Join(DataDir(), "agent", "claude")
 }

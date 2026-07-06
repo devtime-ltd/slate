@@ -118,6 +118,9 @@ func createWorkspace(name, branch string, bg, cd, adopt bool) error {
 		if err := scaffold.GenerateFileMounts(wsDir, cfg, s); err != nil {
 			return fmt.Errorf("generating file mounts: %w", err)
 		}
+		if err := scaffold.GenerateAgentMounts(wsDir, cfg, s); err != nil {
+			return fmt.Errorf("generating agent mounts: %w", err)
+		}
 	}
 	if err := scaffold.GenerateEnvContainer(wsDir, mainRoot, hostname, projectName, name, cfg, proxyConfig); err != nil {
 		return fmt.Errorf("generating .env.container: %w", err)
@@ -129,7 +132,7 @@ func createWorkspace(name, branch string, bg, cd, adopt bool) error {
 	opts := provisionOpts{fresh: true, build: true}
 
 	if bg {
-		return runBackgroundProvision(name, wsDir, opts, cd)
+		return runBackgroundProvision(cfg, name, wsDir, opts, cd)
 	}
 
 	env, err := compose.NewEnv(name, wsDir, hostname)
@@ -141,7 +144,7 @@ func createWorkspace(name, branch string, bg, cd, adopt bool) error {
 	}
 
 	if cd {
-		return spawnShellAt(wsDir)
+		return landAt(cfg, name, wsDir)
 	}
 	return nil
 }
