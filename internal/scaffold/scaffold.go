@@ -248,15 +248,12 @@ func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffol
 	return os.WriteFile(composeOverride, []byte(b.String()), 0o644)
 }
 
-// AgentConfigDir is where the shared Claude home is mounted inside the app
-// container. A neutral path (not the container user's ~/.claude) so the same
-// mounts work for every scaffold; `slate agent` points CLAUDE_CONFIG_DIR here.
+// AgentConfigDir is where the shared Claude home is mounted in the app
+// container; a neutral path so the same mounts work on every scaffold.
 const AgentConfigDir = "/opt/slate-agent/claude"
 
-// agentInstallBlock appends the Claude Code native install to a scaffold
-// Dockerfile. It must come after the template's final USER switch: the
-// installer runs as the runtime user so the launcher lands in that user's
-// ~/.local (writable at runtime, which keeps claude's self-update working).
+// agentInstallBlock goes after a scaffold Dockerfile's final USER switch:
+// installing as the runtime user keeps claude's self-update working.
 func agentInstallBlock(user, home string) string {
 	return fmt.Sprintf(`
 # slate agent: claude
@@ -264,9 +261,7 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 USER %s
-# download-then-run rather than curl|bash: in a pipe the RUN's exit status is
-# bash's, which is 0 on empty input, so a failed download would silently
-# produce an image without claude
+# not piped to bash: a failed download must fail the build
 RUN curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh \
     && bash /tmp/claude-install.sh \
     && rm /tmp/claude-install.sh
@@ -274,12 +269,9 @@ ENV PATH="%s/.local/bin:${PATH}"
 `, user, home)
 }
 
-// GenerateAgentMounts writes a compose override binding the shared Claude
-// home into the primary app service, with the workspace's own session
-// history overlaid on <home>/projects. Claude keys history by cwd and every
-// workspace's cwd is /app, so without the overlay all workspaces would share
-// one session pool; with it, resume inside a workspace can only ever see that
-// workspace's sessions.
+// GenerateAgentMounts writes a compose override mounting the shared Claude
+// home on the primary app service, overlaying per-workspace session history
+// on <home>/projects (claude keys history by cwd, which is /app everywhere).
 func GenerateAgentMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffold) error {
 	slateDir := filepath.Join(workspaceDir, ".slate")
 	composeOverride := filepath.Join(slateDir, "compose.agent.yaml")
@@ -304,9 +296,7 @@ func GenerateAgentMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffo
 	}
 
 	hostHome := config.AgentClaudeDir()
-	// 0o700: this dir will hold Claude credentials once the user logs in.
-	// MkdirAll only applies the mode on creation, so chmod explicitly to
-	// tighten a pre-existing dir too.
+	// holds credentials; MkdirAll won't re-mode an existing dir, hence the chmod
 	if err := os.MkdirAll(hostHome, 0o700); err != nil {
 		return fmt.Errorf("creating agent home: %w", err)
 	}
@@ -317,7 +307,6 @@ func GenerateAgentMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffo
 		return fmt.Errorf("creating agent projects dir: %w", err)
 	}
 
-	// Quoted: the host home may contain spaces (e.g. /Users/John Smith).
 	content := fmt.Sprintf(`services:
   %s:
     volumes:

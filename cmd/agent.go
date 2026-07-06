@@ -98,8 +98,7 @@ func runAgentSession(cfg config.ProjectConfig, wsName, wsDir string, opts agentO
 		execArgs = append(execArgs, "--continue")
 	}
 
-	// Like spawnShellAt: a non-zero exit from the session (ctrl-c, /exit 1)
-	// isn't a slate failure.
+	// as with spawnShellAt, a non-zero session exit isn't a slate failure
 	if err := compose.RunInteractive(env, execArgs...); err != nil {
 		if _, ok := err.(*exec.ExitError); ok {
 			return nil
@@ -118,17 +117,15 @@ func agentService(cfg config.ProjectConfig) string {
 	return "app"
 }
 
-// agentHasSessions reports whether the workspace has any recorded Claude
-// sessions, checked host-side so we can pass --continue only when it will
-// find something (claude errors out on --continue with no history).
+// agentHasSessions reports whether the workspace has recorded sessions
+// (claude errors on --continue when there is no history).
 func agentHasSessions(wsDir string) bool {
 	matches, _ := filepath.Glob(filepath.Join(wsDir, ".slate", "agent", "projects", "*", "*.jsonl"))
 	return len(matches) > 0
 }
 
-// landAt is what `slate new`/`up` drop into after provisioning, when the
-// auto_cd/--cd gate allows dropping in at all. Controlled by `landing` in
-// slate.yml; enabling an agent defaults it to agent-then-shell.
+// landAt dispatches the resolved `landing` after new/up (behind the
+// auto_cd/--cd gate).
 func landAt(cfg config.ProjectConfig, wsName, wsDir string) error {
 	switch cfg.ResolvedLanding() {
 	case "none":

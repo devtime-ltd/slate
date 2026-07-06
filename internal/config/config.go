@@ -63,10 +63,8 @@ func (c ProjectConfig) AgentEnabled() bool {
 	return c.Agent != "" && c.Agent != "none"
 }
 
-// ResolvedLanding is what `slate new`/`up` drop into after provisioning
-// (when the auto_cd/--cd gate allows dropping in at all): "shell", "agent",
-// "agent+shell", or "none". Enabling an agent flips the default from a plain
-// shell to agent-then-shell.
+// ResolvedLanding is what `slate new`/`up` drop into after provisioning;
+// configuring an agent flips the default from "shell" to "agent+shell".
 func (c ProjectConfig) ResolvedLanding() string {
 	if c.Landing != "" {
 		return c.Landing
@@ -267,10 +265,8 @@ func LoadProject(dir string) (ProjectConfig, error) {
 	return cfg, nil
 }
 
-// AgentClaudeDir is the host-side Claude home shared by every workspace's
-// in-container agent (bind-mounted as CLAUDE_CONFIG_DIR). Credentials and
-// settings live here once, per slate installation; per-workspace session
-// history is overlaid separately by GenerateAgentMounts.
+// AgentClaudeDir is the host-side Claude home (credentials + settings)
+// shared by every workspace's in-container agent.
 func AgentClaudeDir() string {
 	return filepath.Join(DataDir(), "agent", "claude")
 }

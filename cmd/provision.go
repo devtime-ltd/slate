@@ -74,9 +74,8 @@ func runProvision(cmd *cobra.Command, args []string) error {
 }
 
 // runBackgroundProvision forks the bg provisioner and then either drops into
-// a shell at the workspace dir (cd=true) or prints the path and exits. Always
-// a plain shell, never the agent: the containers are still provisioning, so
-// there is nothing to exec into yet.
+// a shell at the workspace dir (cd=true) or prints the path and exits. Never
+// the agent landing: the containers are still provisioning.
 func runBackgroundProvision(cfg config.ProjectConfig, name, wsDir string, opts provisionOpts, cd bool) error {
 	if err := detachProvision(name, wsDir, opts); err != nil {
 		return err
