@@ -7,10 +7,8 @@ x-app-base: &app-base
       APP_GID: ${APP_GID:-1000}
   entrypoint: ["sh", "/usr/local/bin/entrypoint"]
   command: ["apache2-foreground"]
-  # Slate's generated overrides (DB host, mail, etc.) reach the app as process
-  # env here too, so they still apply when the entrypoint leaves a worktree's
-  # own tracked .env in place. Laravel's immutable dotenv keeps these over the
-  # file's values.
+  # Overrides reach app/queue as process env too, so they apply even when the
+  # entrypoint leaves a worktree's own tracked .env in place.
   env_file:
     - ../.env.container
   environment:

@@ -75,7 +75,6 @@ Examples:
 			runArgs := append([]string{"exec", execService}, args...)
 			return compose.RunInteractive(env, runArgs...)
 		}
-		// No TTY, but stdin is forwarded so piped input still reaches the command.
 		return compose.ExecPiped(env, execService, args...)
 	},
 }

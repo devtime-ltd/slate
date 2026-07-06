@@ -75,9 +75,8 @@ func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg co
 		}
 	}
 
-	// Keep the container entrypoint in sync with this binary before starting, so
-	// a slate upgrade that changes it takes effect on the next `up` rather than
-	// only after a `slate setup`. It's mounted read-only into the containers.
+	// Keep the deployed entrypoint (mounted into the containers) in sync with
+	// this binary on every up, not only on setup.
 	if _, err := assets.EnsureEntrypoint(); err != nil {
 		return fmt.Errorf("installing entrypoint: %w", err)
 	}

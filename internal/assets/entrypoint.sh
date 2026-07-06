@@ -24,10 +24,7 @@ if [ -f /run/main-env/.env ] || [ -f /app/.env.container ]; then
                 cat /app/.env.container
             fi
         } > "$TMP"
-        # Write via temp file so this is safe even when paths resolve to the
-        # same inode. When /app/.env already exists, only rewrite it if the
-        # content changed (avoids churning its mtime, and skips cmp's noisy
-        # error on a first boot where /app/.env is still absent).
+        # Temp file avoids inode aliasing; only copy when changed (or absent).
         if [ ! -f /app/.env ] || ! cmp -s "$TMP" /app/.env; then
             cp "$TMP" /app/.env
         fi
