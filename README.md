@@ -64,6 +64,7 @@ Tools:
   slate cd [name]                 Spawn a sub-shell rooted at the workspace dir
   slate code [name]               Open workspace in your editor
   slate shell [name]              Bash shell in app container
+  slate exec [-s svc] -- <cmd>    Run an arbitrary command in a container (-i for a TTY)
   slate logs [name] [svc]         Tail logs (default: all services)
   slate proxy                     Manage the HTTPS proxy
   slate dns                       Manage the *.test DNS resolver

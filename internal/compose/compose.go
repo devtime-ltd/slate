@@ -68,6 +68,15 @@ func Exec(env Env, service string, command ...string) error {
 	return Run(env, args...)
 }
 
+// ExecPiped runs a command in a service container with no TTY (-T) but with the
+// host's stdin forwarded, so piped input (e.g. `echo x | slate exec -- cmd`)
+// works while interactive TTY features stay off. Suited to scripts and CI.
+func ExecPiped(env Env, service string, command ...string) error {
+	args := []string{"exec", "-T", service}
+	args = append(args, command...)
+	return buildCmd(env, true, args...).Run()
+}
+
 func Port(env Env, service string, containerPort int) (string, error) {
 	cmd := buildCmd(env, false, "port", service, fmt.Sprintf("%d", containerPort))
 	cmd.Stdout = nil
