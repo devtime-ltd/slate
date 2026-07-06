@@ -34,6 +34,52 @@ var shellCmd = &cobra.Command{
 	},
 }
 
+var (
+	execService     string
+	execInteractive bool
+)
+
+var execCmd = &cobra.Command{
+	Use:   "exec [flags] -- <command> [args...]",
+	Short: "Run an arbitrary command in a workspace container",
+	Long: `Run a one-off command inside a workspace's container (default: app).
+
+The workspace is selected like the other tools: -w/--workspace, the
+SLATE_WORKSPACE env var, or the current directory.
+
+Runs without a TTY by default so it's safe in scripts and CI; stdin is still
+forwarded, so you can pipe input in. Pass -i/--interactive for a TTY-backed
+session (REPLs, prompts).
+
+Examples:
+  slate exec -- ./vendor/bin/phpstan analyse
+  slate exec -- php artisan migrate --force
+  slate exec -s vite -- npm run build
+  slate exec -i -- php artisan tinker`,
+	GroupID: "tools",
+	Args:    cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wsName, wsDir, err := workspace.ResolveWorkspace()
+		if err != nil {
+			return err
+		}
+		hostname, err := resolveHostname(wsName)
+		if err != nil {
+			return err
+		}
+		env, err := compose.NewEnv(wsName, wsDir, hostname)
+		if err != nil {
+			return err
+		}
+		if execInteractive {
+			runArgs := append([]string{"exec", execService}, args...)
+			return compose.RunInteractive(env, runArgs...)
+		}
+		// No TTY, but stdin is forwarded so piped input still reaches the command.
+		return compose.ExecPiped(env, execService, args...)
+	},
+}
+
 var logsCmd = &cobra.Command{
 	Use:   "logs [workspace] [service]",
 	Short: "Tail logs (default: all services)",
@@ -223,6 +269,14 @@ func registerDBCommand(name string, t config.DBTool) {
 func init() {
 	shellCmd.GroupID = "tools"
 	logsCmd.GroupID = "tools"
+
+	// Stop flag parsing at the first positional so the target command's own
+	// flags (e.g. --memory-limit) pass straight through without a leading --.
+	execCmd.Flags().SetInterspersed(false)
+	execCmd.Flags().StringVarP(&execService, "service", "s", "app", "Container/service to run the command in")
+	execCmd.Flags().BoolVarP(&execInteractive, "interactive", "i", false, "Allocate a TTY (for interactive commands)")
+
 	rootCmd.AddCommand(shellCmd)
 	rootCmd.AddCommand(logsCmd)
+	rootCmd.AddCommand(execCmd)
 }
