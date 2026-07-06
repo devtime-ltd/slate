@@ -264,7 +264,12 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 USER %s
-RUN curl -fsSL https://claude.ai/install.sh | bash
+# download-then-run rather than curl|bash: in a pipe the RUN's exit status is
+# bash's, which is 0 on empty input, so a failed download would silently
+# produce an image without claude
+RUN curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh \
+    && bash /tmp/claude-install.sh \
+    && rm /tmp/claude-install.sh
 ENV PATH="%s/.local/bin:${PATH}"
 `, user, home)
 }
@@ -300,8 +305,13 @@ func GenerateAgentMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffo
 
 	hostHome := config.AgentClaudeDir()
 	// 0o700: this dir will hold Claude credentials once the user logs in.
+	// MkdirAll only applies the mode on creation, so chmod explicitly to
+	// tighten a pre-existing dir too.
 	if err := os.MkdirAll(hostHome, 0o700); err != nil {
 		return fmt.Errorf("creating agent home: %w", err)
+	}
+	if err := os.Chmod(hostHome, 0o700); err != nil {
+		return fmt.Errorf("tightening agent home permissions: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Join(agentDir, "projects"), 0o755); err != nil {
 		return fmt.Errorf("creating agent projects dir: %w", err)

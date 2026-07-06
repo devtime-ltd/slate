@@ -780,3 +780,24 @@ func TestGenerateAgentMountsRefusesSymlinkedSlateDir(t *testing.T) {
 		t.Errorf("expected symlink refusal, got %v", err)
 	}
 }
+
+func TestGenerateAgentMountsTightensExistingHomePerms(t *testing.T) {
+	ws := t.TempDir()
+	data := t.TempDir()
+	t.Setenv("SLATE_DATA_DIR", data)
+
+	// pre-existing home from an older build that created it loosely
+	if err := os.MkdirAll(config.AgentClaudeDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := GenerateAgentMounts(ws, config.ProjectConfig{Agent: "claude"}, &nullScaffold{}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(config.AgentClaudeDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("existing agent home should be tightened to 0700, got %o", info.Mode().Perm())
+	}
+}
