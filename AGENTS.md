@@ -124,7 +124,7 @@ Suggested order:
 
 - [ ] `slate attach` - bubbletea TUI tabbed log viewer with shell windows
 - [ ] `slate status` - rich overview of current workspace
-- [ ] `slate exec <service> <command>` - generic exec into any service
+- [x] `slate exec` - generic exec into any service (`-s <service>`, `-i` for TTY)
 - [ ] Shell completions (cobra generates these)
 - [ ] Progress bars / spinners during long operations
 
