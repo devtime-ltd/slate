@@ -208,3 +208,65 @@ func TestLaravelUpHookDoesNotSeed(t *testing.T) {
 		t.Errorf("laravel fresh hook should seed, got:\n%s", fresh)
 	}
 }
+
+func TestLoadProjectAgent(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("scaffold: laravel\nagent: claude\n"), 0o644)
+
+	cfg, err := LoadProject(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AgentEnabled() {
+		t.Error("AgentEnabled() = false, want true")
+	}
+	if got := cfg.ResolvedLanding(); got != "agent+shell" {
+		t.Errorf("ResolvedLanding() = %q, want agent+shell", got)
+	}
+}
+
+func TestLoadProjectAgentUnsupported(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("agent: copilot\n"), 0o644)
+
+	if _, err := LoadProject(dir); err == nil {
+		t.Fatal("expected error for unsupported agent")
+	}
+}
+
+func TestLoadProjectLandingValidation(t *testing.T) {
+	dir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("landing: sideways\n"), 0o644)
+	if _, err := LoadProject(dir); err == nil {
+		t.Fatal("expected error for invalid landing value")
+	}
+
+	// agent landings require an agent to be configured
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("landing: agent\n"), 0o644)
+	if _, err := LoadProject(dir); err == nil {
+		t.Fatal("expected error for agent landing without agent")
+	}
+
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("agent: claude\nlanding: agent\n"), 0o644)
+	cfg, err := LoadProject(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ResolvedLanding(); got != "agent" {
+		t.Errorf("ResolvedLanding() = %q, want agent", got)
+	}
+}
+
+func TestResolvedLandingDefaults(t *testing.T) {
+	if got := (ProjectConfig{}).ResolvedLanding(); got != "shell" {
+		t.Errorf("no agent: ResolvedLanding() = %q, want shell", got)
+	}
+	if got := (ProjectConfig{Agent: "none"}).ResolvedLanding(); got != "shell" {
+		t.Errorf("agent none: ResolvedLanding() = %q, want shell", got)
+	}
+	cfg := ProjectConfig{Agent: "claude", Landing: "none"}
+	if got := cfg.ResolvedLanding(); got != "none" {
+		t.Errorf("explicit none: ResolvedLanding() = %q, want none", got)
+	}
+}

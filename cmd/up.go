@@ -78,6 +78,9 @@ func runUp(cmd *cobra.Command, args []string) error {
 		if err := scaffold.GenerateFileMounts(wsDir, cfg, s); err != nil {
 			return fmt.Errorf("generating file mounts: %w", err)
 		}
+		if err := scaffold.GenerateAgentMounts(wsDir, cfg, s); err != nil {
+			return fmt.Errorf("generating agent mounts: %w", err)
+		}
 	}
 
 	projectName, err := workspace.ProjectName(cfg.Project)
@@ -98,7 +101,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	opts := provisionOpts{fresh: upFresh, build: upBuild, wipe: upFresh}
 
 	if upBg {
-		return runBackgroundProvision(name, wsDir, opts, cd)
+		return runBackgroundProvision(cfg, name, wsDir, opts, cd)
 	}
 
 	env, err := compose.NewEnv(name, wsDir, hostname)
@@ -110,7 +113,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	if cd {
-		return spawnShellAt(wsDir)
+		return landAt(cfg, name, wsDir)
 	}
 	return nil
 }

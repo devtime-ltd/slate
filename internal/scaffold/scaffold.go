@@ -248,6 +248,76 @@ func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffol
 	return os.WriteFile(composeOverride, []byte(b.String()), 0o644)
 }
 
+// AgentConfigDir is where the shared Claude home is mounted inside the app
+// container. A neutral path (not the container user's ~/.claude) so the same
+// mounts work for every scaffold; `slate agent` points CLAUDE_CONFIG_DIR here.
+const AgentConfigDir = "/opt/slate-agent/claude"
+
+// agentInstallBlock appends the Claude Code native install to a scaffold
+// Dockerfile. It must come after the template's final USER switch: the
+// installer runs as the runtime user so the launcher lands in that user's
+// ~/.local (writable at runtime, which keeps claude's self-update working).
+func agentInstallBlock(user, home string) string {
+	return fmt.Sprintf(`
+# slate agent: claude
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+USER %s
+RUN curl -fsSL https://claude.ai/install.sh | bash
+ENV PATH="%s/.local/bin:${PATH}"
+`, user, home)
+}
+
+// GenerateAgentMounts writes a compose override binding the shared Claude
+// home into the primary app service, with the workspace's own session
+// history overlaid on <home>/projects. Claude keys history by cwd and every
+// workspace's cwd is /app, so without the overlay all workspaces would share
+// one session pool; with it, resume inside a workspace can only ever see that
+// workspace's sessions.
+func GenerateAgentMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffold) error {
+	slateDir := filepath.Join(workspaceDir, ".slate")
+	composeOverride := filepath.Join(slateDir, "compose.agent.yaml")
+	agentDir := filepath.Join(slateDir, "agent")
+
+	for _, p := range []string{slateDir, composeOverride, agentDir} {
+		if info, err := os.Lstat(p); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink; refusing to operate", p)
+		}
+	}
+
+	if !cfg.AgentEnabled() {
+		if err := os.Remove(composeOverride); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "  warning: could not remove stale %s: %v\n", composeOverride, err)
+		}
+		return nil
+	}
+
+	services := s.AppLikeServices()
+	if len(services) == 0 {
+		return fmt.Errorf("scaffold %q declares no AppLikeServices(); agent mounts cannot be applied", s.Name())
+	}
+
+	hostHome := config.AgentClaudeDir()
+	// 0o700: this dir will hold Claude credentials once the user logs in.
+	if err := os.MkdirAll(hostHome, 0o700); err != nil {
+		return fmt.Errorf("creating agent home: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(agentDir, "projects"), 0o755); err != nil {
+		return fmt.Errorf("creating agent projects dir: %w", err)
+	}
+
+	// Quoted: the host home may contain spaces (e.g. /Users/John Smith).
+	content := fmt.Sprintf(`services:
+  %s:
+    volumes:
+      - "%s:%s"
+      - ./agent/projects:%s/projects
+`, services[0], hostHome, AgentConfigDir, AgentConfigDir)
+
+	return os.WriteFile(composeOverride, []byte(content), 0o644)
+}
+
 var dbNameRe = regexp.MustCompile(`\{\{DB_NAME(?::([^}]*))?\}\}`)
 var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 

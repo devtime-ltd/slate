@@ -78,10 +78,16 @@ func (s *laravelScaffold) RenderDockerfile(content string, cfg config.ProjectCon
 	// Insert before WORKDIR (which precedes USER) so apt/pecl/ini writes run as root
 	marker := "WORKDIR /app"
 	if idx := strings.Index(content, marker); idx >= 0 {
-		return content[:idx] + inject.String() + "\n" + content[idx:], nil
+		content = content[:idx] + inject.String() + "\n" + content[idx:]
+	} else {
+		content += inject.String()
 	}
 
-	return content + inject.String(), nil
+	if cfg.AgentEnabled() {
+		content += agentInstallBlock("www-data", "/var/www")
+	}
+
+	return content, nil
 }
 
 // renderPHPIniDrop emits a Dockerfile RUN that writes a php.ini conf.d

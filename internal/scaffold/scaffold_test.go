@@ -673,3 +673,110 @@ func TestGenerateEnvContainerKeepsProjectAppKey(t *testing.T) {
 		t.Errorf(".env.container must not override the project's own APP_KEY:\n%s", out)
 	}
 }
+
+func TestLaravelDockerfileAgentInstall(t *testing.T) {
+	s, err := Get("laravel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.RenderDockerfile("WORKDIR /app\nUSER www-data\n", config.ProjectConfig{Scaffold: "laravel", Agent: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "claude.ai/install.sh") {
+		t.Errorf("agent install missing from Dockerfile:\n%s", out)
+	}
+	if !strings.Contains(out, `ENV PATH="/var/www/.local/bin:${PATH}"`) {
+		t.Errorf("agent PATH env missing:\n%s", out)
+	}
+	// install must run as the runtime user, and the block must leave it active
+	if idx := strings.LastIndex(out, "USER "); !strings.HasPrefix(out[idx:], "USER www-data") {
+		t.Errorf("final USER should be www-data:\n%s", out)
+	}
+
+	plain, err := s.RenderDockerfile("WORKDIR /app\nUSER www-data\n", config.ProjectConfig{Scaffold: "laravel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain, "claude.ai/install.sh") {
+		t.Errorf("agent install must be opt-in:\n%s", plain)
+	}
+}
+
+func TestNextjsDockerfileAgentInstall(t *testing.T) {
+	s, err := Get("nextjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.RenderDockerfile("WORKDIR /app\nUSER node\n", config.ProjectConfig{Scaffold: "nextjs", Agent: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "claude.ai/install.sh") {
+		t.Errorf("agent install missing from Dockerfile:\n%s", out)
+	}
+	if !strings.Contains(out, `ENV PATH="/home/node/.local/bin:${PATH}"`) {
+		t.Errorf("agent PATH env missing:\n%s", out)
+	}
+}
+
+func TestGenerateAgentMountsWritesOverride(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("SLATE_DATA_DIR", t.TempDir())
+	cfg := config.ProjectConfig{Agent: "claude"}
+
+	if err := GenerateAgentMounts(ws, cfg, &nullScaffold{}); err != nil {
+		t.Fatal(err)
+	}
+
+	override, err := os.ReadFile(filepath.Join(ws, ".slate/compose.agent.yaml"))
+	if err != nil {
+		t.Fatalf("expected compose.agent.yaml: %v", err)
+	}
+	out := string(override)
+
+	if !strings.Contains(out, config.AgentClaudeDir()+":"+AgentConfigDir) {
+		t.Errorf("shared claude home mount missing:\n%s", out)
+	}
+	if !strings.Contains(out, "./agent/projects:"+AgentConfigDir+"/projects") {
+		t.Errorf("per-workspace projects overlay missing:\n%s", out)
+	}
+	if strings.Contains(out, "queue:") {
+		t.Errorf("agent mounts belong on the primary service only:\n%s", out)
+	}
+
+	if info, err := os.Stat(config.AgentClaudeDir()); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("agent home should exist with 0700 (holds credentials); info=%v err=%v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".slate/agent/projects")); err != nil {
+		t.Errorf("workspace projects dir should exist: %v", err)
+	}
+}
+
+func TestGenerateAgentMountsRemovesStaleOverride(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("SLATE_DATA_DIR", t.TempDir())
+
+	if err := GenerateAgentMounts(ws, config.ProjectConfig{Agent: "claude"}, &nullScaffold{}); err != nil {
+		t.Fatal(err)
+	}
+	// agent turned off in slate.yml: the override must not linger
+	if err := GenerateAgentMounts(ws, config.ProjectConfig{}, &nullScaffold{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".slate/compose.agent.yaml")); !os.IsNotExist(err) {
+		t.Errorf("stale compose.agent.yaml should be removed; err=%v", err)
+	}
+}
+
+func TestGenerateAgentMountsRefusesSymlinkedSlateDir(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("SLATE_DATA_DIR", t.TempDir())
+	if err := os.Symlink(t.TempDir(), filepath.Join(ws, ".slate")); err != nil {
+		t.Fatal(err)
+	}
+	err := GenerateAgentMounts(ws, config.ProjectConfig{Agent: "claude"}, &nullScaffold{})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("expected symlink refusal, got %v", err)
+	}
+}

@@ -63,6 +63,16 @@ The Scaffold interface exposes a `Tools() map[string]config.Tool` method. `Tool`
 
 User-defined tools in `slate.yml` are always exec tools. Scaffolds can mix both.
 
+## Agent sessions (`agent: claude`)
+
+User-facing behaviour is in the README; internals:
+
+- **Image:** each scaffold's `RenderDockerfile` appends `agentInstallBlock` when the agent is enabled. The native installer runs as the runtime user (www-data/node) so the launcher lands in that user's `~/.local` and claude's self-update keeps working inside a running container; `ENV PATH` makes it visible to `compose exec`.
+- **Mounts:** `GenerateAgentMounts` writes `.slate/compose.agent.yaml`, binding the per-install home `~/.local/share/slate/agent/claude` (0700, holds credentials) to `/opt/slate-agent/claude` on the primary app-like service, then overlaying the worktree's `.slate/agent/projects` on `.../projects`. The neutral path avoids caring about the container user's home per scaffold; `slate agent` points `CLAUDE_CONFIG_DIR` at it. The overlay exists because claude keys session history by cwd and every workspace's cwd is `/app` - without it, all workspaces would share one session pool.
+- **Continue detection:** `--continue` is passed only when the workspace has session files (host-side glob of `.slate/agent/projects/*/*.jsonl`), because claude errors on `--continue` with no history.
+- **Landing:** `landAt` (cmd/agent.go) dispatches the `landing` config after new/up, behind the existing auto_cd/--cd gate. `--bg` always lands in a plain shell: the containers are still provisioning, so there is nothing to exec into.
+- **Toggle-off:** `GenerateAgentMounts` removes a stale `compose.agent.yaml` when the agent is disabled; `compose.buildCmd` only adds the `-f` for it when the file exists.
+
 ## Scaffold interface checklist
 
 When adding a new scaffold, implement every method on `internal/scaffold.Scaffold`. The non-obvious one:
