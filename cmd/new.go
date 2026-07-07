@@ -99,6 +99,13 @@ func createWorkspace(name, branch string, bg, cd, adopt bool) error {
 		}
 	}
 
+	// the worktree may carry its own slate.yml (existing branch, --adopt)
+	cfg, err = config.LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		return err
+	}
+	warnIfWorkspaceConfigDiffers(mainRoot, wsDir)
+
 	projectName, err := workspace.ProjectName(cfg.Project)
 	if err != nil {
 		return err

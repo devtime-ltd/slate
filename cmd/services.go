@@ -17,9 +17,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// workspaceConfigNote returns a warning when the worktree's slate.yml differs
-// from the main checkout's: slate only reads the latter, so an edit made
-// inside the workspace silently does nothing.
+// workspaceConfigNote flags when the (authoritative) worktree slate.yml
+// differs from the main checkout's.
 func workspaceConfigNote(mainRoot, wsDir string) string {
 	if mainRoot == "" || wsDir == "" || mainRoot == wsDir {
 		return ""
@@ -32,7 +31,7 @@ func workspaceConfigNote(mainRoot, wsDir string) string {
 	if bytes.Equal(bytes.TrimSpace(wsData), bytes.TrimSpace(mainData)) {
 		return ""
 	}
-	return fmt.Sprintf("  note: this workspace's slate.yml differs from the main checkout's; slate reads config from %s", filepath.Join(mainRoot, "slate.yml"))
+	return "  note: using this workspace's slate.yml (differs from the main checkout's)"
 }
 
 func warnIfWorkspaceConfigDiffers(mainRoot, wsDir string) {

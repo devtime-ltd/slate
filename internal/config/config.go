@@ -265,6 +265,27 @@ func LoadProject(dir string) (ProjectConfig, error) {
 	return cfg, nil
 }
 
+// LoadProjectForWorkspace prefers the worktree's slate.yml so a branch can
+// test config changes; `project:` identity stays pinned to the main checkout.
+func LoadProjectForWorkspace(mainRoot, wsDir string) (ProjectConfig, error) {
+	mainCfg, err := LoadProject(mainRoot)
+	if err != nil {
+		return mainCfg, err
+	}
+	if wsDir == "" {
+		return mainCfg, nil
+	}
+	if info, err := os.Stat(filepath.Join(wsDir, "slate.yml")); err != nil || info.IsDir() {
+		return mainCfg, nil
+	}
+	wsCfg, err := LoadProject(wsDir)
+	if err != nil {
+		return wsCfg, fmt.Errorf("workspace slate.yml: %w", err)
+	}
+	wsCfg.Project = mainCfg.Project
+	return wsCfg, nil
+}
+
 // AgentClaudeDir is the host-side Claude home (credentials + settings)
 // shared by every workspace's in-container agent.
 func AgentClaudeDir() string {

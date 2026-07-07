@@ -166,6 +166,7 @@ Suggested order:
 | Project registry with stable names | Names assigned at registration time, survive removals |
 | Caddy container (now) → embedded Caddy (P1) | Container removes Caddy install dep today; embedded removes container too |
 | Per-installation secret key for passwords | Same workspace name gives different passwords across installations |
+| Worktree slate.yml authoritative, `project:` pinned to main | Branches can test config changes before merging without forking a workspace's identity mid-life |
 | Hash-suffix on DB names | Safe across all databases (max 63 chars), unique per project+workspace+label |
 | `--bg` fast/slow split | Fast phase (worktree+scaffold) runs inline so editing starts immediately; slow phase (build+lifecycle) detaches with `Setsid` and survives parent close |
 | Lockfile-driven status (not in-memory) | Survives slate restarts, visible across shells, single source of truth for concurrency guards |

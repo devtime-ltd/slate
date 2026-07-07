@@ -43,7 +43,7 @@ pick from the workspace's past sessions.`,
 		if err != nil {
 			return err
 		}
-		cfg, err := config.LoadProject(mainRoot)
+		cfg, err := config.LoadProjectForWorkspace(mainRoot, wsDir)
 		if err != nil {
 			return err
 		}
@@ -65,11 +65,7 @@ type agentOpts struct {
 
 func runAgentSession(cfg config.ProjectConfig, wsName, wsDir string, opts agentOpts) error {
 	if !cfg.AgentEnabled() {
-		target := "slate.yml in the main checkout (not the workspace's copy)"
-		if mainRoot, err := workspace.MainRoot(); err == nil {
-			target = filepath.Join(mainRoot, "slate.yml")
-		}
-		return fmt.Errorf("no agent configured for this project; add `agent: claude` to %s, then run `slate up %s --build`", target, wsName)
+		return fmt.Errorf("no agent configured; add `agent: claude` to slate.yml, then run `slate up %s --build`", wsName)
 	}
 
 	hostname, err := resolveHostname(wsName)

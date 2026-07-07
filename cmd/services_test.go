@@ -28,13 +28,13 @@ func TestWorkspaceConfigNote(t *testing.T) {
 		t.Errorf("identical configs: want no note, got %q", note)
 	}
 
-	// edited in the worktree only: warn, pointing at the file slate reads
+	// edited in the worktree only: note which config wins
 	write(wsDir, "scaffold: laravel\nagent: claude\n")
 	note := workspaceConfigNote(mainRoot, wsDir)
 	if note == "" {
 		t.Fatal("differing configs: want a note")
 	}
-	if want := filepath.Join(mainRoot, "slate.yml"); !strings.Contains(note, want) {
-		t.Errorf("note should name %s, got %q", want, note)
+	if !strings.Contains(note, "workspace's slate.yml") {
+		t.Errorf("note should say the workspace config is in use, got %q", note)
 	}
 }
