@@ -205,7 +205,10 @@ Run Claude Code inside a workspace container instead of on your host: the agent'
 ```yaml
 scaffold: laravel
 agent: claude
+claude_permission_mode: auto   # optional: passed to claude as --permission-mode
 ```
+
+The mode is passed through verbatim (`auto`, `acceptEdits`, `plan`, `bypassPermissions`, ...); claude rejects unknown values at session start. Worth remembering with the permissive modes: the container limits the blast radius, but the worktree and outbound network are still in reach.
 
 Rebuild once after enabling (`slate up --build`); the claude CLI is baked into the image. Then:
 
