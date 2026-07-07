@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,30 @@ import (
 	"github.com/devtime-ltd/slate/internal/scaffold"
 	"github.com/spf13/cobra"
 )
+
+// workspaceConfigNote returns a warning when the worktree's slate.yml differs
+// from the main checkout's: slate only reads the latter, so an edit made
+// inside the workspace silently does nothing.
+func workspaceConfigNote(mainRoot, wsDir string) string {
+	if mainRoot == "" || wsDir == "" || mainRoot == wsDir {
+		return ""
+	}
+	wsData, err := os.ReadFile(filepath.Join(wsDir, "slate.yml"))
+	if err != nil {
+		return ""
+	}
+	mainData, _ := os.ReadFile(filepath.Join(mainRoot, "slate.yml"))
+	if bytes.Equal(bytes.TrimSpace(wsData), bytes.TrimSpace(mainData)) {
+		return ""
+	}
+	return fmt.Sprintf("  note: this workspace's slate.yml differs from the main checkout's; slate reads config from %s", filepath.Join(mainRoot, "slate.yml"))
+}
+
+func warnIfWorkspaceConfigDiffers(mainRoot, wsDir string) {
+	if note := workspaceConfigNote(mainRoot, wsDir); note != "" {
+		fmt.Fprintln(os.Stderr, note)
+	}
+}
 
 // resolveAutoCd returns the explicit flag value if the user passed --cd /
 // --cd=false. Otherwise it falls back to the global config's auto_cd default,
