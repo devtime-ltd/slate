@@ -140,7 +140,7 @@ scaffold: laravel
 
 That's it for most projects. The scaffold provides sensible defaults for the Docker image, services, lifecycle scripts, and available tool commands.
 
-Slate always reads `slate.yml` from the project's **main checkout**; editing the copy inside a workspace worktree has no effect (slate prints a note if the two differ).
+Each workspace uses the `slate.yml` in its **own worktree** when present, so a branch can change config (packages, hooks, tools, agent) and test it with `slate up` before merging; slate prints a note whenever a workspace's config differs from the main checkout's. The one exception is `project:`, which is always taken from the main checkout so a branch can't change the workspace's identity (hostname, compose project, database names). Heavier changes like swapping `scaffold:` usually want `slate up --fresh`.
 
 ### Customisation
 

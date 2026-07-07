@@ -270,3 +270,37 @@ func TestResolvedLandingDefaults(t *testing.T) {
 		t.Errorf("explicit none: ResolvedLanding() = %q, want none", got)
 	}
 }
+
+func TestLoadProjectForWorkspace(t *testing.T) {
+	mainRoot := t.TempDir()
+	wsDir := t.TempDir()
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: laravel\nproject: mainname\n"), 0o644)
+
+	// no workspace slate.yml: main config applies
+	cfg, err := LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentEnabled() || cfg.Project != "mainname" {
+		t.Errorf("want main config, got %+v", cfg)
+	}
+
+	// workspace slate.yml wins, but project identity stays main's
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nproject: renamed\nagent: claude\n"), 0o644)
+	cfg, err = LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AgentEnabled() {
+		t.Error("workspace agent setting should apply")
+	}
+	if cfg.Project != "mainname" {
+		t.Errorf("project should stay pinned to main, got %q", cfg.Project)
+	}
+
+	// invalid workspace config errors rather than silently using main's
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("agent: copilot\n"), 0o644)
+	if _, err := LoadProjectForWorkspace(mainRoot, wsDir); err == nil {
+		t.Error("invalid workspace slate.yml should error")
+	}
+}

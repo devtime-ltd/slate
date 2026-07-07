@@ -66,7 +66,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cfg, err := config.LoadProject(mainRoot)
+	cfg, err := config.LoadProjectForWorkspace(mainRoot, wsDir)
 	if err != nil {
 		return fmt.Errorf("loading slate.yml: %w", err)
 	}

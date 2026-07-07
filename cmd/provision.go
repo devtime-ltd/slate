@@ -43,11 +43,11 @@ func runProvision(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := config.LoadProject(mainRoot)
+	wsDir, err := workspace.WorkspaceDir(name)
 	if err != nil {
 		return err
 	}
-	wsDir, err := workspace.WorkspaceDir(name)
+	cfg, err := config.LoadProjectForWorkspace(mainRoot, wsDir)
 	if err != nil {
 		return err
 	}

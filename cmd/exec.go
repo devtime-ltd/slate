@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"runtime"
 	"strings"
 
@@ -143,7 +144,18 @@ func registerToolCommands() {
 	if err != nil {
 		return
 	}
-	cfg, err := config.LoadProject(mainRoot)
+	// runs before flag parsing: only SLATE_WORKSPACE/cwd (not -w) can pick the tools' workspace
+	wsDir := ""
+	if ws := os.Getenv("SLATE_WORKSPACE"); ws != "" {
+		if dir, err := workspace.WorkspaceDir(ws); err == nil {
+			if info, statErr := os.Stat(dir); statErr == nil && info.IsDir() {
+				wsDir = dir
+			}
+		}
+	} else if _, dir, err := workspace.ResolveFromCwd(); err == nil {
+		wsDir = dir
+	}
+	cfg, err := config.LoadProjectForWorkspace(mainRoot, wsDir)
 	if err != nil {
 		return
 	}
