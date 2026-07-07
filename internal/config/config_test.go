@@ -304,3 +304,16 @@ func TestLoadProjectForWorkspace(t *testing.T) {
 		t.Error("invalid workspace slate.yml should error")
 	}
 }
+
+func TestLoadProjectClaudePermissionMode(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("agent: claude\nclaude_permission_mode: auto\n"), 0o644)
+
+	cfg, err := LoadProject(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ClaudePermissionMode != "auto" {
+		t.Errorf("ClaudePermissionMode = %q, want auto", cfg.ClaudePermissionMode)
+	}
+}

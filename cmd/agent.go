@@ -92,6 +92,9 @@ func runAgentSession(cfg config.ProjectConfig, wsName, wsDir string, opts agentO
 		"-e", "SLATE_WORKSPACE=" + wsName,
 		service, "claude",
 	}
+	if cfg.ClaudePermissionMode != "" {
+		execArgs = append(execArgs, "--permission-mode", cfg.ClaudePermissionMode)
+	}
 	switch {
 	case opts.picker:
 		execArgs = append(execArgs, "--resume")
