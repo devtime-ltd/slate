@@ -97,6 +97,9 @@ func runAgentSession(cfg config.ProjectConfig, wsName, wsDir string, opts agentO
 		execArgs = append(execArgs, "--resume")
 	case !opts.fresh && agentHasSessions(wsDir):
 		execArgs = append(execArgs, "--continue")
+	default:
+		// not on resume: would stomp a manual /rename
+		execArgs = append(execArgs, "--name", hostname)
 	}
 
 	// as with spawnShellAt, a non-zero session exit isn't a slate failure

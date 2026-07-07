@@ -232,7 +232,7 @@ How it's wired:
 
 - Log in once on first use (the session prompts you); credentials and settings are shared across all workspaces, stored on the host at `~/.local/share/slate/agent/claude/`. Your host's own Claude login is never mounted into containers.
 - Session history lives per workspace (in the worktree's `.slate/agent/`), so continue/resume only ever sees the current workspace's sessions. It's stored on the host, so it survives `slate down`/`up` and even `up --fresh`; only `slate rm` removes it, along with the workspace. Note a session resumed after `--fresh` may remember database state that no longer exists; use `slate agent --new` when you want a clean slate too.
-- Sessions run with `SLATE_WORKSPACE=<name>` set, handy for statuslines or scripts.
+- Fresh sessions are named `<project>--<workspace>` (shown in claude's session picker and terminal title), and run with `SLATE_WORKSPACE=<name>` set, handy for statuslines or scripts.
 - The usual container guarantees apply: no host SSH keys or cloud credentials, and the main `.git` is mounted read-only, so review and commit from the host.
 - `scaffold: none` projects: slate neither builds your image nor manages your compose file, so the setup is yours: install the claude CLI in the image, and add both mounts to your `app` service (`~/.local/share/slate/agent/claude` to `/opt/slate-agent/claude` for shared credentials, and the worktree's `.slate/agent/projects` to `/opt/slate-agent/claude/projects` for per-workspace history). `slate agent` execs `claude` with `CLAUDE_CONFIG_DIR` pointed at that path; without the mounts you'd re-login per container and lose history on recreate.
 
