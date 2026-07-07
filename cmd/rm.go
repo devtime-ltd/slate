@@ -94,17 +94,29 @@ func runRm(cmd *cobra.Command, args []string) error {
 	fmt.Printf(""+tick()+" %s removed\n", hostname)
 
 	if cwdInside && mainRoot != "" {
+		if insideSlateShell() {
+			fmt.Println("Your cwd was destroyed; exiting the slate shell.")
+			popSlateShell()
+			return nil
+		}
 		fmt.Printf("Your cwd was destroyed; dropping into a shell at %q (exit to return).\n", mainRoot)
 		return spawnShellAt(mainRoot)
 	}
 	return nil
 }
 
-// cwdIsInside reports whether the process CWD is at or under dir.
+// cwdIsInside reports whether the process CWD is at or under dir, resolving
+// symlinks on both sides (cwd follows $PWD, which may be a symlinked path).
 func cwdIsInside(dir string) bool {
 	cwd, err := os.Getwd()
 	if err != nil || cwd == "" {
 		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
 	}
 	if cwd == dir {
 		return true

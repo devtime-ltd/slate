@@ -92,7 +92,7 @@ Add `--project <name>` to any command to target a project other than the current
 - `slate new <name> --adopt`: carry your uncommitted changes from the main checkout into the new worktree (tracked changes patched in, untracked files copied). The main checkout is left untouched.
 - `slate up [name] --fresh`: recreate containers + volumes (worktree code preserved) and run the new-workspace lifecycle.
 - `slate up [name] --build`: force image rebuild.
-- `slate rm [name]`: warns if the worktree has uncommitted changes (`3 modified, 1 untracked`) before asking for confirmation; `-f` skips the prompt but still warns to stderr. If your shell's cwd was inside the workspace being destroyed, slate drops you into a sub-shell at the project's main checkout afterwards (type `exit` to return).
+- `slate rm [name]`: warns if the worktree has uncommitted changes (`3 modified, 1 untracked`) before asking for confirmation; `-f` skips the prompt but still warns to stderr. If your shell's cwd was inside the workspace being destroyed and you're in a slate-spawned shell (auto-cd, `slate cd`), slate exits it so you pop straight back to the shell you came from, history intact; otherwise it drops you into a sub-shell at the project's main checkout (type `exit` to return).
 
 ### One-off commands: `slate exec`
 

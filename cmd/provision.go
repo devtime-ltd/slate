@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"syscall"
 
@@ -152,6 +153,7 @@ func spawnShellAt(dir string) error {
 	c := hostCommand(shell)
 	c.Dir = dir
 	c.Stdin = os.Stdin
+	c.Env = append(os.Environ(), "SLATE_SHELL=1")
 	if err := c.Run(); err != nil {
 		if _, ok := err.(*exec.ExitError); ok {
 			return nil
@@ -159,4 +161,15 @@ func spawnShellAt(dir string) error {
 		return err
 	}
 	return nil
+}
+
+func insideSlateShell() bool {
+	return os.Getenv("SLATE_SHELL") != ""
+}
+
+// popSlateShell exits the enclosing slate-spawned shell via SIGHUP; we
+// ignore HUP first because the dying shell HUPs its jobs (us).
+func popSlateShell() {
+	signal.Ignore(syscall.SIGHUP)
+	_ = syscall.Kill(os.Getppid(), syscall.SIGHUP)
 }
