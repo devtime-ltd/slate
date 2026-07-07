@@ -47,6 +47,7 @@ pick from the workspace's past sessions.`,
 		if err != nil {
 			return err
 		}
+		warnIfWorkspaceConfigDiffers(mainRoot, wsDir)
 		return runAgentSession(cfg, name, wsDir, agentOpts{fresh: agentNew, picker: agentResume})
 	},
 }
@@ -64,7 +65,11 @@ type agentOpts struct {
 
 func runAgentSession(cfg config.ProjectConfig, wsName, wsDir string, opts agentOpts) error {
 	if !cfg.AgentEnabled() {
-		return fmt.Errorf("no agent configured for this project; add `agent: claude` to slate.yml and run `slate up %s --build`", wsName)
+		target := "slate.yml in the main checkout (not the workspace's copy)"
+		if mainRoot, err := workspace.MainRoot(); err == nil {
+			target = filepath.Join(mainRoot, "slate.yml")
+		}
+		return fmt.Errorf("no agent configured for this project; add `agent: claude` to %s, then run `slate up %s --build`", target, wsName)
 	}
 
 	hostname, err := resolveHostname(wsName)

@@ -70,6 +70,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("loading slate.yml: %w", err)
 	}
+	warnIfWorkspaceConfigDiffers(mainRoot, wsDir)
 
 	if err := scaffold.Generate(wsDir, mainRoot, cfg); err != nil {
 		return fmt.Errorf("generating scaffold: %w", err)

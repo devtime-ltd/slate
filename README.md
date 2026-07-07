@@ -140,6 +140,8 @@ scaffold: laravel
 
 That's it for most projects. The scaffold provides sensible defaults for the Docker image, services, lifecycle scripts, and available tool commands.
 
+Slate always reads `slate.yml` from the project's **main checkout**; editing the copy inside a workspace worktree has no effect (slate prints a note if the two differ).
+
 ### Customisation
 
 ```yaml
