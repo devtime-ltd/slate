@@ -60,7 +60,7 @@ func (s *nextjsScaffold) Tools() map[string]config.Tool {
 
 func (s *nextjsScaffold) RenderDockerfile(content string, cfg config.ProjectConfig) (string, error) {
 	if cfg.AgentEnabled() {
-		content += agentInstallBlock("node", "/home/node")
+		content += agentStageBlock("node", "/home/node", false)
 	}
 	return content, nil
 }

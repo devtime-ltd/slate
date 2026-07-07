@@ -674,46 +674,62 @@ func TestGenerateEnvContainerKeepsProjectAppKey(t *testing.T) {
 	}
 }
 
-func TestLaravelDockerfileAgentInstall(t *testing.T) {
+func TestLaravelDockerfileAgentStage(t *testing.T) {
 	s, err := Get("laravel")
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := s.RenderDockerfile("WORKDIR /app\nUSER www-data\n", config.ProjectConfig{Scaffold: "laravel", Agent: "claude"})
+	out, err := s.RenderDockerfile("FROM php:8.3-apache AS app\nWORKDIR /app\nUSER www-data\n", config.ProjectConfig{Scaffold: "laravel", Agent: "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "claude.ai/install.sh") {
-		t.Errorf("agent install missing from Dockerfile:\n%s", out)
+	stageIdx := strings.Index(out, "FROM app AS agent")
+	if stageIdx < 0 {
+		t.Fatalf("agent stage missing from Dockerfile:\n%s", out)
 	}
-	if !strings.Contains(out, `ENV PATH="/var/www/.local/bin:${PATH}"`) {
-		t.Errorf("agent PATH env missing:\n%s", out)
+	base, stage := out[:stageIdx], out[stageIdx:]
+	if strings.Contains(base, "claude.ai/install.sh") {
+		t.Errorf("claude must not be baked into the app stage:\n%s", base)
 	}
-	// install must run as the runtime user, and the block must leave it active
-	if idx := strings.LastIndex(out, "USER "); !strings.HasPrefix(out[idx:], "USER www-data") {
-		t.Errorf("final USER should be www-data:\n%s", out)
+	if !strings.Contains(stage, "claude.ai/install.sh") {
+		t.Errorf("claude install missing from agent stage:\n%s", stage)
+	}
+	if !strings.Contains(stage, "deb.nodesource.com/setup_22.x") {
+		t.Errorf("node install missing from laravel agent stage:\n%s", stage)
+	}
+	if !strings.Contains(stage, `ENV PATH="/var/www/.local/bin:${PATH}"`) {
+		t.Errorf("agent PATH env missing:\n%s", stage)
+	}
+	if idx := strings.LastIndex(stage, "USER "); !strings.HasPrefix(stage[idx:], "USER www-data") {
+		t.Errorf("agent stage should end as www-data:\n%s", stage)
 	}
 
-	plain, err := s.RenderDockerfile("WORKDIR /app\nUSER www-data\n", config.ProjectConfig{Scaffold: "laravel"})
+	plain, err := s.RenderDockerfile("FROM php:8.3-apache AS app\nWORKDIR /app\nUSER www-data\n", config.ProjectConfig{Scaffold: "laravel"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(plain, "claude.ai/install.sh") {
-		t.Errorf("agent install must be opt-in:\n%s", plain)
+	if strings.Contains(plain, "FROM app AS agent") {
+		t.Errorf("agent stage must be opt-in:\n%s", plain)
 	}
 }
 
-func TestNextjsDockerfileAgentInstall(t *testing.T) {
+func TestNextjsDockerfileAgentStage(t *testing.T) {
 	s, err := Get("nextjs")
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := s.RenderDockerfile("WORKDIR /app\nUSER node\n", config.ProjectConfig{Scaffold: "nextjs", Agent: "claude"})
+	out, err := s.RenderDockerfile("FROM node:22-slim AS app\nWORKDIR /app\nUSER node\n", config.ProjectConfig{Scaffold: "nextjs", Agent: "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(out, "FROM app AS agent") {
+		t.Errorf("agent stage missing:\n%s", out)
+	}
 	if !strings.Contains(out, "claude.ai/install.sh") {
-		t.Errorf("agent install missing from Dockerfile:\n%s", out)
+		t.Errorf("claude install missing:\n%s", out)
+	}
+	if strings.Contains(out, "nodesource") {
+		t.Errorf("nextjs agent stage should not install node (base image has it):\n%s", out)
 	}
 	if !strings.Contains(out, `ENV PATH="/home/node/.local/bin:${PATH}"`) {
 		t.Errorf("agent PATH env missing:\n%s", out)
@@ -725,7 +741,7 @@ func TestGenerateAgentMountsWritesOverride(t *testing.T) {
 	t.Setenv("SLATE_DATA_DIR", t.TempDir())
 	cfg := config.ProjectConfig{Agent: "claude"}
 
-	if err := GenerateAgentMounts(ws, cfg, &nullScaffold{}); err != nil {
+	if err := GenerateAgentMounts(ws, cfg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -741,8 +757,8 @@ func TestGenerateAgentMountsWritesOverride(t *testing.T) {
 	if !strings.Contains(out, "./agent/projects:"+AgentConfigDir+"/projects") {
 		t.Errorf("per-workspace projects overlay missing:\n%s", out)
 	}
-	if strings.Contains(out, "queue:") {
-		t.Errorf("agent mounts belong on the primary service only:\n%s", out)
+	if !strings.Contains(out, "agent:") {
+		t.Errorf("mounts must target the agent service:\n%s", out)
 	}
 
 	if info, err := os.Stat(config.AgentClaudeDir()); err != nil || info.Mode().Perm() != 0o700 {
@@ -757,11 +773,11 @@ func TestGenerateAgentMountsRemovesStaleOverride(t *testing.T) {
 	ws := t.TempDir()
 	t.Setenv("SLATE_DATA_DIR", t.TempDir())
 
-	if err := GenerateAgentMounts(ws, config.ProjectConfig{Agent: "claude"}, &nullScaffold{}); err != nil {
+	if err := GenerateAgentMounts(ws, config.ProjectConfig{Agent: "claude"}); err != nil {
 		t.Fatal(err)
 	}
 	// agent turned off in slate.yml: the override must not linger
-	if err := GenerateAgentMounts(ws, config.ProjectConfig{}, &nullScaffold{}); err != nil {
+	if err := GenerateAgentMounts(ws, config.ProjectConfig{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(ws, ".slate/compose.agent.yaml")); !os.IsNotExist(err) {
@@ -775,7 +791,7 @@ func TestGenerateAgentMountsRefusesSymlinkedSlateDir(t *testing.T) {
 	if err := os.Symlink(t.TempDir(), filepath.Join(ws, ".slate")); err != nil {
 		t.Fatal(err)
 	}
-	err := GenerateAgentMounts(ws, config.ProjectConfig{Agent: "claude"}, &nullScaffold{})
+	err := GenerateAgentMounts(ws, config.ProjectConfig{Agent: "claude"})
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Errorf("expected symlink refusal, got %v", err)
 	}
@@ -790,7 +806,7 @@ func TestGenerateAgentMountsTightensExistingHomePerms(t *testing.T) {
 	if err := os.MkdirAll(config.AgentClaudeDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := GenerateAgentMounts(ws, config.ProjectConfig{Agent: "claude"}, &nullScaffold{}); err != nil {
+	if err := GenerateAgentMounts(ws, config.ProjectConfig{Agent: "claude"}); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(config.AgentClaudeDir())
@@ -799,5 +815,40 @@ func TestGenerateAgentMountsTightensExistingHomePerms(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o700 {
 		t.Errorf("existing agent home should be tightened to 0700, got %o", info.Mode().Perm())
+	}
+}
+
+func TestComposeAgentService(t *testing.T) {
+	for _, tc := range []struct{ scaffold, dbKey string }{
+		{"laravel", ""},
+		{"nextjs", "postgres"},
+	} {
+		s, err := Get(tc.scaffold)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := s.FS().ReadFile(tc.scaffold + "/compose.yaml.tmpl")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		with, err := renderCompose(string(raw), "", config.ProjectConfig{Scaffold: tc.scaffold, Agent: "claude", Database: tc.dbKey})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(with, "agent:") || !strings.Contains(with, "target: agent") {
+			t.Errorf("%s: agent service missing when enabled:\n%s", tc.scaffold, with)
+		}
+		if !strings.Contains(with, "target: app") {
+			t.Errorf("%s: app build must pin target app:\n%s", tc.scaffold, with)
+		}
+
+		without, err := renderCompose(string(raw), "", config.ProjectConfig{Scaffold: tc.scaffold, Database: tc.dbKey})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(without, "agent:") {
+			t.Errorf("%s: agent service must be opt-in:\n%s", tc.scaffold, without)
+		}
 	}
 }

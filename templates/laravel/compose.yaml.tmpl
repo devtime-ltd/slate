@@ -2,6 +2,7 @@ x-app-base: &app-base
   build:
     context: ..
     dockerfile: .slate/Dockerfile
+    target: app
     args:
       APP_UID: ${APP_UID:-1000}
       APP_GID: ${APP_GID:-1000}
@@ -36,6 +37,23 @@ services:
     <<: *app-base
     command: ["php", "artisan", "queue:work", "--tries=3", "--timeout=60"]
     restart: unless-stopped
+{{- if .Agent}}
+
+  agent:
+    <<: *app-base
+    build:
+      context: ..
+      dockerfile: .slate/Dockerfile
+      target: agent
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    environment:
+      COMPOSER_HOME: /app/.slate/composer
+      NPM_CONFIG_CACHE: /app/.slate/npm-cache
+{{- end}}
 
   mysql:
     image: mysql:8.4

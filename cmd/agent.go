@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/devtime-ltd/slate/internal/compose"
 	"github.com/devtime-ltd/slate/internal/config"
@@ -20,10 +21,10 @@ var (
 
 var agentCmd = &cobra.Command{
 	Use:   "agent [workspace]",
-	Short: "Claude Code session in the app container",
-	Long: `Start or continue a Claude Code session inside the workspace's app
-container. Requires "agent: claude" in slate.yml (the image installs the
-claude CLI at build time).
+	Short: "Claude Code session in the workspace's agent container",
+	Long: `Start or continue a Claude Code session inside the workspace's dedicated
+agent container: the app image plus the agent toolchain (claude, and Node for
+scaffolds whose app image lacks it). Requires "agent: claude" in slate.yml.
 
 Credentials and settings are shared across workspaces (one login per slate
 installation); session history is stored per workspace, so continuing a
@@ -77,9 +78,8 @@ func runAgentSession(cfg config.ProjectConfig, wsName, wsDir string, opts agentO
 		return err
 	}
 
-	service := agentService(cfg)
-	if err := compose.ExecQuiet(env, service, "sh", "-c", "command -v claude"); err != nil {
-		return fmt.Errorf("claude not found in the %s container (is the workspace up, and was the image built with `agent: claude` set?)\nRebuild with: slate up %s --build", service, wsName)
+	if err := compose.ExecQuiet(env, scaffold.AgentService, "sh", "-c", "command -v claude"); err != nil {
+		return fmt.Errorf("agent container not available (after enabling `agent: claude` or upgrading slate, the workspace needs a rebuild)\nRebuild with: slate up %s --build", wsName)
 	}
 
 	if _, err := os.Stat(filepath.Join(config.AgentClaudeDir(), ".credentials.json")); err != nil {
@@ -90,7 +90,8 @@ func runAgentSession(cfg config.ProjectConfig, wsName, wsDir string, opts agentO
 		"exec",
 		"-e", "CLAUDE_CONFIG_DIR=" + scaffold.AgentConfigDir,
 		"-e", "SLATE_WORKSPACE=" + wsName,
-		service, "claude",
+		scaffold.AgentService, "claude",
+		"--append-system-prompt", agentBriefing(cfg, wsName, hostname),
 	}
 	if cfg.ClaudePermissionMode != "" {
 		execArgs = append(execArgs, "--permission-mode", cfg.ClaudePermissionMode)
@@ -115,13 +116,28 @@ func runAgentSession(cfg config.ProjectConfig, wsName, wsDir string, opts agentO
 	return nil
 }
 
-func agentService(cfg config.ProjectConfig) string {
-	if s, err := scaffold.Get(cfg.Scaffold); err == nil {
-		if services := s.AppLikeServices(); len(services) > 0 {
-			return services[0]
-		}
+// agentBriefing orients the session: what this container can and cannot do,
+// and the environment traps agents otherwise rediscover every time.
+func agentBriefing(cfg config.ProjectConfig, wsName, hostname string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "You are in the dedicated agent container of slate workspace %q, served at https://%s.test (browsable from the host, not from here).\n", wsName, hostname)
+	b.WriteString(`The project worktree is bind-mounted at /app, shared with the workspace's other containers.
+The main repo's .git is mounted read-only: git status/diff/log work, but committing and pushing happen on the host; prepare changes and let the user commit.
+You cannot manage sibling containers (no docker access). For service restarts, logs of other services, or reprovisioning, ask the user to run slate on the host: slate restart, slate logs, slate up.
+`)
+	switch cfg.Scaffold {
+	case "laravel":
+		b.WriteString(`This container has PHP (composer, artisan, vendor binaries like pest/pint) and Node 22 (npm/npx; node_modules is shared with the vite service).
+Sibling services by hostname: mysql:3306 (the workspace's dev database), mailpit:1025 (SMTP), vite:5173.
+DB_* in process env point at the dev MySQL, and real env beats phpunit.xml <env> entries unless they set force="true": run tests against sqlite (DB_CONNECTION=sqlite DB_DATABASE=:memory: ./vendor/bin/pest) or a dedicated test database, never the dev one.
+`)
+	case "nextjs":
+		b.WriteString(`This container has Node 22 (npm/npx/yarn) with the project's node_modules.
+Sibling services by hostname: postgres:5432 (the workspace's dev database, when enabled), mailpit:1025 (SMTP).
+DATABASE_URL in process env points at the dev database: point tests at their own database, never the dev one.
+`)
 	}
-	return "app"
+	return b.String()
 }
 
 // agentHasSessions reports whether the workspace has recorded sessions

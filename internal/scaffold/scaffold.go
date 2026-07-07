@@ -132,6 +132,7 @@ func renderCompose(content, mainRoot string, cfg config.ProjectConfig) (string, 
 	if err := tmpl.Execute(&b, map[string]any{
 		"HasMainEnv": hasMainEnv,
 		"Database":   cfg.Database,
+		"Agent":      cfg.AgentEnabled(),
 	}); err != nil {
 		return "", err
 	}
@@ -248,31 +249,46 @@ func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffol
 	return os.WriteFile(composeOverride, []byte(b.String()), 0o644)
 }
 
-// AgentConfigDir is where the shared Claude home is mounted in the app
+// AgentConfigDir is where the shared Claude home is mounted in the agent
 // container; a neutral path so the same mounts work on every scaffold.
 const AgentConfigDir = "/opt/slate-agent/claude"
 
-// agentInstallBlock goes after a scaffold Dockerfile's final USER switch:
-// installing as the runtime user keeps claude's self-update working.
-func agentInstallBlock(user, home string) string {
-	return fmt.Sprintf(`
-# slate agent: claude
+// AgentService is the compose service agent sessions exec into; the scaffold
+// templates define it when the agent is enabled (scaffold `none` users define
+// their own).
+const AgentService = "agent"
+
+// agentStageBlock appends the agent image stage: the app image plus the
+// agent toolchain. claude installs as the runtime user so its self-update
+// keeps working.
+func agentStageBlock(user, home string, installNode bool) string {
+	b := `
+FROM app AS agent
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-USER %s
-# not piped to bash: a failed download must fail the build
+`
+	if installNode {
+		b += `RUN curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource.sh \
+    && bash /tmp/nodesource.sh \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* /tmp/nodesource.sh
+`
+	}
+	// not piped to bash: a failed download must fail the build
+	b += fmt.Sprintf(`USER %s
 RUN curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh \
     && bash /tmp/claude-install.sh \
     && rm /tmp/claude-install.sh
 ENV PATH="%s/.local/bin:${PATH}"
 `, user, home)
+	return b
 }
 
 // GenerateAgentMounts writes a compose override mounting the shared Claude
-// home on the primary app service, overlaying per-workspace session history
-// on <home>/projects (claude keys history by cwd, which is /app everywhere).
-func GenerateAgentMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffold) error {
+// home on the agent service, overlaying per-workspace session history on
+// <home>/projects (claude keys history by cwd, which is /app everywhere).
+func GenerateAgentMounts(workspaceDir string, cfg config.ProjectConfig) error {
 	slateDir := filepath.Join(workspaceDir, ".slate")
 	composeOverride := filepath.Join(slateDir, "compose.agent.yaml")
 	agentDir := filepath.Join(slateDir, "agent")
@@ -288,11 +304,6 @@ func GenerateAgentMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffo
 			fmt.Fprintf(os.Stderr, "  warning: could not remove stale %s: %v\n", composeOverride, err)
 		}
 		return nil
-	}
-
-	services := s.AppLikeServices()
-	if len(services) == 0 {
-		return fmt.Errorf("scaffold %q declares no AppLikeServices(); agent mounts cannot be applied", s.Name())
 	}
 
 	hostHome := config.AgentClaudeDir()
@@ -312,7 +323,7 @@ func GenerateAgentMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffo
     volumes:
       - "%s:%s"
       - ./agent/projects:%s/projects
-`, services[0], hostHome, AgentConfigDir, AgentConfigDir)
+`, AgentService, hostHome, AgentConfigDir, AgentConfigDir)
 
 	return os.WriteFile(composeOverride, []byte(content), 0o644)
 }
