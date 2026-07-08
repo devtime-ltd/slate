@@ -209,68 +209,6 @@ func TestLaravelUpHookDoesNotSeed(t *testing.T) {
 	}
 }
 
-func TestLoadProjectAgent(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("scaffold: laravel\nagent: claude\n"), 0o644)
-
-	cfg, err := LoadProject(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cfg.AgentEnabled() {
-		t.Error("AgentEnabled() = false, want true")
-	}
-	if got := cfg.ResolvedLanding(); got != "agent+shell" {
-		t.Errorf("ResolvedLanding() = %q, want agent+shell", got)
-	}
-}
-
-func TestLoadProjectAgentUnsupported(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("agent: copilot\n"), 0o644)
-
-	if _, err := LoadProject(dir); err == nil {
-		t.Fatal("expected error for unsupported agent")
-	}
-}
-
-func TestLoadProjectLandingValidation(t *testing.T) {
-	dir := t.TempDir()
-
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("landing: sideways\n"), 0o644)
-	if _, err := LoadProject(dir); err == nil {
-		t.Fatal("expected error for invalid landing value")
-	}
-
-	// agent landings require an agent to be configured
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("landing: agent\n"), 0o644)
-	if _, err := LoadProject(dir); err == nil {
-		t.Fatal("expected error for agent landing without agent")
-	}
-
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("agent: claude\nlanding: agent\n"), 0o644)
-	cfg, err := LoadProject(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := cfg.ResolvedLanding(); got != "agent" {
-		t.Errorf("ResolvedLanding() = %q, want agent", got)
-	}
-}
-
-func TestResolvedLandingDefaults(t *testing.T) {
-	if got := (ProjectConfig{}).ResolvedLanding(); got != "shell" {
-		t.Errorf("no agent: ResolvedLanding() = %q, want shell", got)
-	}
-	if got := (ProjectConfig{Agent: "none"}).ResolvedLanding(); got != "shell" {
-		t.Errorf("agent none: ResolvedLanding() = %q, want shell", got)
-	}
-	cfg := ProjectConfig{Agent: "claude", Landing: "none"}
-	if got := cfg.ResolvedLanding(); got != "none" {
-		t.Errorf("explicit none: ResolvedLanding() = %q, want none", got)
-	}
-}
-
 func TestLoadProjectForWorkspace(t *testing.T) {
 	mainRoot := t.TempDir()
 	wsDir := t.TempDir()
@@ -281,40 +219,60 @@ func TestLoadProjectForWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AgentEnabled() || cfg.Project != "mainname" {
+	if cfg.LandingCmd != "" || cfg.Project != "mainname" {
 		t.Errorf("want main config, got %+v", cfg)
 	}
 
 	// workspace slate.yml wins, but project identity stays main's
-	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nproject: renamed\nagent: claude\n"), 0o644)
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nproject: renamed\nlanding_cmd: echo hi\n"), 0o644)
 	cfg, err = LoadProjectForWorkspace(mainRoot, wsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.AgentEnabled() {
-		t.Error("workspace agent setting should apply")
+	if cfg.LandingCmd != "echo hi" {
+		t.Error("workspace landing_cmd should apply")
 	}
 	if cfg.Project != "mainname" {
 		t.Errorf("project should stay pinned to main, got %q", cfg.Project)
 	}
 
 	// invalid workspace config errors rather than silently using main's
-	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("agent: copilot\n"), 0o644)
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("landing: sideways\n"), 0o644)
 	if _, err := LoadProjectForWorkspace(mainRoot, wsDir); err == nil {
 		t.Error("invalid workspace slate.yml should error")
 	}
 }
 
-func TestLoadProjectClaudeArgs(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("agent: claude\nclaude_args: [--permission-mode=auto, --remote-control]\n"), 0o644)
-
-	cfg, err := LoadProject(dir)
-	if err != nil {
-		t.Fatal(err)
+func TestLandingCommand(t *testing.T) {
+	if _, ok := (ProjectConfig{}).LandingCommand(); ok {
+		t.Error("no landing config: want no command")
 	}
-	want := []string{"--permission-mode=auto", "--remote-control"}
-	if len(cfg.ClaudeArgs) != 2 || cfg.ClaudeArgs[0] != want[0] || cfg.ClaudeArgs[1] != want[1] {
-		t.Errorf("ClaudeArgs = %v, want %v", cfg.ClaudeArgs, want)
+	if _, ok := (ProjectConfig{Landing: "shell"}).LandingCommand(); ok {
+		t.Error("landing shell: want no command")
+	}
+	if cmd, ok := (ProjectConfig{Landing: "claude"}).LandingCommand(); !ok || !strings.Contains(cmd, "claude") {
+		t.Errorf("claude preset: got %q ok=%v", cmd, ok)
+	}
+	if cmd, ok := (ProjectConfig{LandingCmd: "tmux attach"}).LandingCommand(); !ok || cmd != "tmux attach" {
+		t.Errorf("landing_cmd: got %q ok=%v", cmd, ok)
+	}
+}
+
+func TestLoadProjectLandingValidation(t *testing.T) {
+	dir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("landing: sideways\n"), 0o644)
+	if _, err := LoadProject(dir); err == nil {
+		t.Fatal("expected error for unknown landing value")
+	}
+
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("landing: claude\nlanding_cmd: echo hi\n"), 0o644)
+	if _, err := LoadProject(dir); err == nil {
+		t.Fatal("expected error when both landing and landing_cmd are set")
+	}
+
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("landing_cmd: tmux new -A -s {{HOSTNAME}}\n"), 0o644)
+	if _, err := LoadProject(dir); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -28,14 +28,10 @@ func buildCmd(env Env, interactive bool, args ...string) *exec.Cmd {
 
 	composeFile := scaffold.ComposeFilePath(env.WorkspaceDir)
 	filesOverride := filepath.Join(env.WorkspaceDir, ".slate", "compose.files.yaml")
-	agentOverride := filepath.Join(env.WorkspaceDir, ".slate", "compose.agent.yaml")
 
 	cmdArgs := []string{"compose", "-f", composeFile}
 	if _, err := os.Stat(filesOverride); err == nil {
 		cmdArgs = append(cmdArgs, "-f", filesOverride)
-	}
-	if _, err := os.Stat(agentOverride); err == nil {
-		cmdArgs = append(cmdArgs, "-f", agentOverride)
 	}
 	cmdArgs = append(cmdArgs, "--env-file", filepath.Join(env.WorkspaceDir, ".env.container"))
 	cmdArgs = append(cmdArgs, args...)
@@ -77,17 +73,6 @@ func ExecPiped(env Env, service string, command ...string) error {
 	args := []string{"exec", "-T", service}
 	args = append(args, command...)
 	return buildCmd(env, true, args...).Run()
-}
-
-// ExecQuiet runs a command in a service with all output suppressed. Useful
-// for existence probes where only the exit status matters.
-func ExecQuiet(env Env, service string, command ...string) error {
-	args := []string{"exec", "-T", service}
-	args = append(args, command...)
-	cmd := buildCmd(env, false, args...)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	return cmd.Run()
 }
 
 func Port(env Env, service string, containerPort int) (string, error) {

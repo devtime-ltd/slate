@@ -126,9 +126,6 @@ func createWorkspace(name, branch string, bg, cd, adopt bool) error {
 			return fmt.Errorf("generating file mounts: %w", err)
 		}
 	}
-	if err := scaffold.GenerateAgentMounts(wsDir, cfg); err != nil {
-		return fmt.Errorf("generating agent mounts: %w", err)
-	}
 	if err := scaffold.GenerateEnvContainer(wsDir, mainRoot, hostname, projectName, name, cfg, proxyConfig); err != nil {
 		return fmt.Errorf("generating .env.container: %w", err)
 	}

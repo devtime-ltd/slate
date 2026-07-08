@@ -47,8 +47,12 @@ func runUp(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if err != nil {
-		// Only offer to create when the failure is "not found", not validation
+		// Only offer to create when the failure is "not found", not validation;
+		// never prompt without a terminal (EOF would read as consent).
 		if len(args) > 0 && strings.Contains(err.Error(), "not found") {
+			if !isInteractiveTerminal() {
+				return fmt.Errorf("workspace '%s' not found (create it with `slate new %s`)", args[0], args[0])
+			}
 			fmt.Printf("Workspace '%s' doesn't exist. Create it? [Y/n] ", args[0])
 			reader := bufio.NewReader(os.Stdin)
 			answer, _ := reader.ReadString('\n')
@@ -79,9 +83,6 @@ func runUp(cmd *cobra.Command, args []string) error {
 		if err := scaffold.GenerateFileMounts(wsDir, cfg, s); err != nil {
 			return fmt.Errorf("generating file mounts: %w", err)
 		}
-	}
-	if err := scaffold.GenerateAgentMounts(wsDir, cfg); err != nil {
-		return fmt.Errorf("generating agent mounts: %w", err)
 	}
 
 	projectName, err := workspace.ProjectName(cfg.Project)

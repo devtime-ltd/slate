@@ -81,8 +81,8 @@ func runBackgroundProvision(cfg config.ProjectConfig, name, wsDir string, opts p
 	if err := detachProvision(name, wsDir, opts); err != nil {
 		return err
 	}
-	if landing := cfg.ResolvedLanding(); landing == "agent" || landing == "agent+shell" {
-		fmt.Println("Run `slate agent` once provisioning completes.")
+	if _, ok := cfg.LandingCommand(); ok {
+		fmt.Println("Run `slate land` once provisioning completes.")
 	}
 	if cd {
 		return spawnShellAt(wsDir)

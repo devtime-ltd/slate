@@ -63,16 +63,16 @@ The Scaffold interface exposes a `Tools() map[string]config.Tool` method. `Tool`
 
 User-defined tools in `slate.yml` are always exec tools. Scaffolds can mix both.
 
-## Agent sessions (`agent: claude`)
+## Landing (`landing:` / `landing_cmd:`)
 
-User-facing behaviour is in the README; internals:
-
-- **Image:** scaffold Dockerfiles name their runtime stage `AS app` and compose pins `target: app`, so `RenderDockerfile` can append a `FROM app AS agent` stage (via `agentStageBlock`) when the agent is enabled: Node 22 from NodeSource where the app image lacks it, then claude via the native installer as the runtime user (so self-update works; `ENV PATH` exposes it to `compose exec`). App/queue images carry no agent tooling.
-- **Service:** compose templates define an `agent` service behind `{{if .Agent}}`: the app image's superset built from `target: agent`, same `/app` bind + env_file + network, `command: sleep infinity` as a standing exec target. `slate agent` execs `scaffold.AgentService` and appends a scaffold-aware environment briefing via `--append-system-prompt` (see `agentBriefing`).
-- **Mounts:** `GenerateAgentMounts` writes `.slate/compose.agent.yaml`, binding the per-install home `~/.local/share/slate/agent/claude` (0700, holds credentials) to `/opt/slate-agent/claude` on the agent service, then overlaying the worktree's `.slate/agent/projects` on `.../projects`. The neutral path avoids caring about the container user's home per scaffold; `slate agent` points `CLAUDE_CONFIG_DIR` at it. The overlay exists because claude keys session history by cwd and every workspace's cwd is `/app` - without it, all workspaces would share one session pool.
-- **Continue detection:** `--continue` is passed only when the workspace has session files (host-side glob of `.slate/agent/projects/*/*.jsonl`), because claude errors on `--continue` with no history.
-- **Landing:** `landAt` (cmd/agent.go) dispatches the `landing` config after new/up, behind the existing auto_cd/--cd gate. `--bg` always lands in a plain shell: the containers are still provisioning, so there is nothing to exec into.
-- **Toggle-off:** `GenerateAgentMounts` removes a stale `compose.agent.yaml` when the agent is disabled; `compose.buildCmd` only adds the `-f` for it when the file exists.
+`slate new`/`up` (and `slate land` on demand) can run a command in the fresh
+worktree before dropping to the shell: a named preset via `landing:` (the
+`claude` preset continues/starts a host claude session named after the
+workspace) or any command via `landing_cmd:` ({{WORKSPACE}}/{{PROJECT}}/
+{{HOSTNAME}} expanded, run through `sh -c` with SLATE_WORKSPACE set, behind
+the auto_cd/--cd TTY gate). Landing runs on the HOST by design: sessions get
+the user's own login/skills/MCPs/git while app code and dependency installs
+stay containerised. Presets live in `config.landingPresets`.
 
 ## Scaffold interface checklist
 
@@ -168,6 +168,7 @@ Suggested order:
 | Caddy container (now) → embedded Caddy (P1) | Container removes Caddy install dep today; embedded removes container too |
 | Per-installation secret key for passwords | Same workspace name gives different passwords across installations |
 | Worktree slate.yml authoritative, `project:` pinned to main | Branches can test config changes before merging without forking a workspace's identity mid-life |
+| Landing runs host-side (no in-container agent) | The user's own tooling/credentials apply; slate stays vendor-neutral; containers keep isolating app code and deps |
 | Hash-suffix on DB names | Safe across all databases (max 63 chars), unique per project+workspace+label |
 | `--bg` fast/slow split | Fast phase (worktree+scaffold) runs inline so editing starts immediately; slow phase (build+lifecycle) detaches with `Setsid` and survives parent close |
 | Lockfile-driven status (not in-memory) | Survives slate restarts, visible across shells, single source of truth for concurrency guards |

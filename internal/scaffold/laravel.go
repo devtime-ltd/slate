@@ -83,10 +83,6 @@ func (s *laravelScaffold) RenderDockerfile(content string, cfg config.ProjectCon
 		content += inject.String()
 	}
 
-	if cfg.AgentEnabled() {
-		content += agentStageBlock("www-data", "/var/www", true)
-	}
-
 	return content, nil
 }
 

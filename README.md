@@ -59,12 +59,13 @@ Tools:
   slate setup                     One-time host setup (proxy + DNS + CA cert + secret key)
   slate teardown                  Remove all slate infrastructure
   slate doctor                    Check dependencies
+  slate brief                     Print an agent-facing cheatsheet for this project
   slate open [name]               Open workspace URL in browser
   slate path [name]               Print workspace path (pipeable, --open)
   slate cd [name]                 Spawn a sub-shell rooted at the workspace dir
   slate code [name]               Open workspace in your editor
   slate shell [name]              Bash shell in app container
-  slate agent [name]              Claude Code session in app container (--new, --resume)
+  slate land [name]               Run the landing command in a workspace (see Landing)
   slate exec [-s svc] -- <cmd>    Run an arbitrary command in a container (-i for a TTY)
   slate logs [name] [svc]         Tail logs (default: all services)
   slate proxy                     Manage the HTTPS proxy
@@ -198,50 +199,35 @@ tools:
 
 User-defined tools in `slate.yml` are always exec tools (run a command in a container).
 
-## Agent sessions (Claude Code)
+## Landing: what `new`/`up` drop you into
 
-Run Claude Code inside the workspace instead of on your host: the agent's package installs and code execution stay sandboxed, and each workspace keeps its own session history. The agent gets its own container, built as a superset of the app image (plus Node 22 on scaffolds without it, plus the claude CLI), on the workspace network: it can run the full toolchain (composer/artisan/pest and npm/vitest alike) and reach every service (`mysql`, `mailpit`, `vite`, ...) by hostname. The app and queue images stay clean. Opt in via `slate.yml`:
-
-```yaml
-scaffold: laravel
-agent: claude
-claude_args: [--permission-mode=auto]   # optional: extra flags for every session
-```
-
-`claude_args` is appended verbatim after slate's own flags (so your flags win any conflict): any claude CLI option works without slate having to know about it. Worth remembering with permissive permission modes: the container limits the blast radius, but the worktree and outbound network are still in reach.
-
-Machine-wide claude preferences need no slate.yml at all: the shared agent home `~/.local/share/slate/agent/claude/settings.json` is a regular claude `settings.json` applied to every slate workspace (e.g. `"remoteControlAtStartup": true` switches Remote Control on for all slate sessions), and a repo's own `.claude/settings.json` travels with the project as usual.
-
-Rebuild once after enabling (`slate up --build`); the claude CLI is baked into the image. Then:
-
-```sh
-slate agent              # continue the workspace's latest session (or start one)
-slate agent --new        # force a fresh session
-slate agent --resume     # pick from this workspace's past sessions
-```
-
-With an agent enabled, `slate new`/`slate up` drop you straight into a session once provisioning finishes, then into a workspace shell when you exit it. The `landing` key controls that:
+When provisioning finishes at an interactive terminal, slate drops you into the workspace (the `auto_cd` behaviour). `landing` in `slate.yml` picks what runs first, and `slate land [name]` runs the same thing on demand from anywhere:
 
 ```yaml
-landing: agent+shell   # default when agent is set: session, then shell on exit
-# landing: agent       # session only
-# landing: shell       # plain shell; claude stays available via `slate agent`
-# landing: none        # never drop into anything
+landing: claude    # preset: continue the worktree's latest claude session,
+                   # or start a fresh one named <project>--<workspace>
+# landing: shell   # default: just a shell in the worktree
+# landing: none    # never drop into anything
 ```
 
-Want claude installed but no auto-attach? Pair `agent: claude` with `landing: shell` (or `none`).
+For anything custom, `landing_cmd` runs an arbitrary command in the worktree (then drops to the shell when it exits). `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` are expanded, and it runs via `sh -c` with `SLATE_WORKSPACE` set:
 
-`landing` obeys the same gates as `auto_cd`: it only fires at an interactive terminal, and `--cd=false` skips it for one invocation. With `--bg` you always get a plain shell (the containers are still provisioning); run `slate agent` when it's ready.
+```yaml
+# a session that survives your terminal app and allows multiple attachments
+landing_cmd: tmux new-session -A -s {{HOSTNAME}} 'claude --continue || claude --name "{{HOSTNAME}}"'
+```
 
-How it's wired:
+With that recipe, `slate land` from any terminal re-attaches to the workspace's running session (`tmux new -A` is attach-or-create), killing your terminal doesn't kill the session, and detaching after `new`/`up` leaves you in the workspace shell.
 
-- Log in once on first use (the session prompts you); credentials and settings are shared across all workspaces, stored on the host at `~/.local/share/slate/agent/claude/`. Your host's own Claude login is never mounted into containers.
-- Session history lives per workspace (in the worktree's `.slate/agent/`), so continue/resume only ever sees the current workspace's sessions. It's stored on the host, so it survives `slate down`/`up` and even `up --fresh`; only `slate rm` removes it, along with the workspace. Note a session resumed after `--fresh` may remember database state that no longer exists; use `slate agent --new` when you want a clean slate too.
-- Fresh sessions are named `<project>--<workspace>` (shown in claude's session picker and terminal title), and run with `SLATE_WORKSPACE=<name>` set, handy for statuslines or scripts.
-- Sessions start with a short environment briefing appended to the system prompt: which services exist, where the toolchain lives, and the test-database gotcha below, so the agent doesn't rediscover them each session.
-- The usual container guarantees apply: no host SSH keys or cloud credentials, no docker socket (the agent can't manage sibling containers), and the main `.git` is mounted read-only, so review and commit from the host.
-- Tests inside containers: slate injects `DB_*` as real process env, and PHPUnit/Pest `<env>` overrides in phpunit.xml lose to real env unless they set `force="true"`. Add that attribute (behaviour on the host is unchanged), or point tests at a dedicated database via `{{DB_NAME:testing}}`; otherwise in-container test runs hit the workspace's dev database.
-- `scaffold: none` projects: slate neither builds your image nor manages your compose file, so the setup is yours: define an `agent` service with the claude CLI installed, and slate adds the credential/history mounts to it and execs `claude` there with `CLAUDE_CONFIG_DIR` pointed at `/opt/slate-agent/claude`.
+The landing runs on your **host**: your normal claude login, skills, MCPs, and git access all apply. The blast-radius protection stays where it always was, in the containers that run the app and its dependency installs.
+
+### Slate for agents
+
+Slate is designed to be driven by an LLM running on the host:
+
+- Every command honours `SLATE_WORKSPACE=<name>`, so agents never depend on a cwd or an interactive picker.
+- Non-interactive contexts fail fast with instructions instead of prompting (`slate up missing-ws` errors rather than asking to create; `slate exec` runs without a TTY and forwards stdin).
+- `slate brief` prints a project-aware markdown cheatsheet (workspace targeting, tools, URLs, the container test-database gotcha) for pasting into your `CLAUDE.md`/`AGENTS.md`.
 
 ## Scaffolds
 
