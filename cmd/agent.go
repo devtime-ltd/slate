@@ -93,9 +93,6 @@ func runAgentSession(cfg config.ProjectConfig, wsName, wsDir string, opts agentO
 		scaffold.AgentService, "claude",
 		"--append-system-prompt", agentBriefing(cfg, wsName, hostname),
 	}
-	if cfg.ClaudePermissionMode != "" {
-		execArgs = append(execArgs, "--permission-mode", cfg.ClaudePermissionMode)
-	}
 	switch {
 	case opts.picker:
 		execArgs = append(execArgs, "--resume")
@@ -105,6 +102,8 @@ func runAgentSession(cfg config.ProjectConfig, wsName, wsDir string, opts agentO
 		// not on resume: would stomp a manual /rename
 		execArgs = append(execArgs, "--name", hostname)
 	}
+	// last, so project flags win any conflict with slate's own
+	execArgs = append(execArgs, cfg.ClaudeArgs...)
 
 	// as with spawnShellAt, a non-zero session exit isn't a slate failure
 	if err := compose.RunInteractive(env, execArgs...); err != nil {

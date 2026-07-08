@@ -305,15 +305,16 @@ func TestLoadProjectForWorkspace(t *testing.T) {
 	}
 }
 
-func TestLoadProjectClaudePermissionMode(t *testing.T) {
+func TestLoadProjectClaudeArgs(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("agent: claude\nclaude_permission_mode: auto\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("agent: claude\nclaude_args: [--permission-mode=auto, --remote-control]\n"), 0o644)
 
 	cfg, err := LoadProject(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ClaudePermissionMode != "auto" {
-		t.Errorf("ClaudePermissionMode = %q, want auto", cfg.ClaudePermissionMode)
+	want := []string{"--permission-mode=auto", "--remote-control"}
+	if len(cfg.ClaudeArgs) != 2 || cfg.ClaudeArgs[0] != want[0] || cfg.ClaudeArgs[1] != want[1] {
+		t.Errorf("ClaudeArgs = %v, want %v", cfg.ClaudeArgs, want)
 	}
 }

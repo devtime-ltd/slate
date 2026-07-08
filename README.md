@@ -205,10 +205,12 @@ Run Claude Code inside the workspace instead of on your host: the agent's packag
 ```yaml
 scaffold: laravel
 agent: claude
-claude_permission_mode: auto   # optional: passed to claude as --permission-mode
+claude_args: [--permission-mode=auto]   # optional: extra flags for every session
 ```
 
-The mode is passed through verbatim (`auto`, `acceptEdits`, `plan`, `bypassPermissions`, ...); claude rejects unknown values at session start. Worth remembering with the permissive modes: the container limits the blast radius, but the worktree and outbound network are still in reach.
+`claude_args` is appended verbatim after slate's own flags (so your flags win any conflict): any claude CLI option works without slate having to know about it. Worth remembering with permissive permission modes: the container limits the blast radius, but the worktree and outbound network are still in reach.
+
+Machine-wide claude preferences need no slate.yml at all: the shared agent home `~/.local/share/slate/agent/claude/settings.json` is a regular claude `settings.json` applied to every slate workspace (e.g. `"remoteControlAtStartup": true` switches Remote Control on for all slate sessions), and a repo's own `.claude/settings.json` travels with the project as usual.
 
 Rebuild once after enabling (`slate up --build`); the claude CLI is baked into the image. Then:
 

@@ -44,20 +44,20 @@ type DBTool struct {
 func (DBTool) isTool() {}
 
 type ProjectConfig struct {
-	Scaffold             string              `yaml:"scaffold"`
-	Project              string              `yaml:"project"`
-	Database             string              `yaml:"database"`
-	Editor               string              `yaml:"editor"`
-	New                  string              `yaml:"new"`
-	Up                   string              `yaml:"up"`
-	Env                  map[string]string   `yaml:"env"`
-	AppPort              int                 `yaml:"app_port"`
-	VitePort             int                 `yaml:"vite_port"`
-	Tools                map[string]ExecTool `yaml:"tools"`
-	Agent                string              `yaml:"agent"`
-	ClaudePermissionMode string              `yaml:"claude_permission_mode"`
-	Landing              string              `yaml:"landing"`
-	Extra                map[string]any      `yaml:",inline"`
+	Scaffold   string              `yaml:"scaffold"`
+	Project    string              `yaml:"project"`
+	Database   string              `yaml:"database"`
+	Editor     string              `yaml:"editor"`
+	New        string              `yaml:"new"`
+	Up         string              `yaml:"up"`
+	Env        map[string]string   `yaml:"env"`
+	AppPort    int                 `yaml:"app_port"`
+	VitePort   int                 `yaml:"vite_port"`
+	Tools      map[string]ExecTool `yaml:"tools"`
+	Agent      string              `yaml:"agent"`
+	ClaudeArgs []string            `yaml:"claude_args"`
+	Landing    string              `yaml:"landing"`
+	Extra      map[string]any      `yaml:",inline"`
 }
 
 func (c ProjectConfig) AgentEnabled() bool {
