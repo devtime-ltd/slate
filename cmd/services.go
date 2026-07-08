@@ -106,7 +106,9 @@ func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg co
 	}
 
 	fmt.Printf("Starting containers for %s...\n", hostname)
-	upArgs := []string{"up", "-d"}
+	// --remove-orphans: drop containers for services no longer in the
+	// generated compose file (e.g. after a scaffold or config change)
+	upArgs := []string{"up", "-d", "--remove-orphans"}
 	if opts.build {
 		upArgs = append(upArgs, "--build")
 	}

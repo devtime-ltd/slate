@@ -3,7 +3,6 @@ services:
     build:
       context: ..
       dockerfile: .slate/Dockerfile
-      target: app
       args:
         APP_UID: ${APP_UID:-1000}
         APP_GID: ${APP_GID:-1000}
@@ -22,31 +21,6 @@ services:
       - ${SLATE_ENTRYPOINT:?Run via slate}:/usr/local/bin/entrypoint:ro
     env_file:
       - ../.env.container
-{{- if .Agent}}
-
-  agent:
-    build:
-      context: ..
-      dockerfile: .slate/Dockerfile
-      target: agent
-      args:
-        APP_UID: ${APP_UID:-1000}
-        APP_GID: ${APP_GID:-1000}
-    entrypoint: ["sh", "/usr/local/bin/entrypoint"]
-    command: ["sleep", "infinity"]
-    restart: unless-stopped
-    environment:
-      NPM_CONFIG_CACHE: /app/.slate/npm-cache
-    volumes:
-      - ..:/app
-{{- if .HasMainEnv}}
-      - ${MAIN_ROOT:?Run via slate}/.env:/run/main-env/.env:ro
-{{- end}}
-      - ${MAIN_ROOT}/.git:${MAIN_ROOT}/.git:ro
-      - ${SLATE_ENTRYPOINT:?Run via slate}:/usr/local/bin/entrypoint:ro
-    env_file:
-      - ../.env.container
-{{- end}}
 {{- if eq .Database "postgres"}}
 
   postgres:
