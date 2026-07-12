@@ -219,59 +219,59 @@ func TestLoadProjectForWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.LandingCmd != "" || cfg.Project != "mainname" {
+	if cfg.LobbyCmd != "" || cfg.Project != "mainname" {
 		t.Errorf("want main config, got %+v", cfg)
 	}
 
 	// workspace slate.yml wins, but project identity stays main's
-	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nproject: renamed\nlanding_cmd: echo hi\n"), 0o644)
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nproject: renamed\nlobby_cmd: echo hi\n"), 0o644)
 	cfg, err = LoadProjectForWorkspace(mainRoot, wsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.LandingCmd != "echo hi" {
-		t.Error("workspace landing_cmd should apply")
+	if cfg.LobbyCmd != "echo hi" {
+		t.Error("workspace lobby_cmd should apply")
 	}
 	if cfg.Project != "mainname" {
 		t.Errorf("project should stay pinned to main, got %q", cfg.Project)
 	}
 
 	// invalid workspace config errors rather than silently using main's
-	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("landing: sideways\n"), 0o644)
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("lobby: sideways\n"), 0o644)
 	if _, err := LoadProjectForWorkspace(mainRoot, wsDir); err == nil {
 		t.Error("invalid workspace slate.yml should error")
 	}
 }
 
-func TestLandingCommand(t *testing.T) {
-	if _, ok := (ProjectConfig{}).LandingCommand(); ok {
-		t.Error("no landing config: want no command")
+func TestLobbyCommand(t *testing.T) {
+	if _, ok := (ProjectConfig{}).LobbyCommand(); ok {
+		t.Error("no lobby config: want no command")
 	}
-	if _, ok := (ProjectConfig{Landing: "shell"}).LandingCommand(); ok {
-		t.Error("landing shell: want no command")
+	if _, ok := (ProjectConfig{Lobby: "shell"}).LobbyCommand(); ok {
+		t.Error("lobby shell: want no command")
 	}
-	if cmd, ok := (ProjectConfig{Landing: "claude"}).LandingCommand(); !ok || !strings.Contains(cmd, "claude") {
+	if cmd, ok := (ProjectConfig{Lobby: "claude"}).LobbyCommand(); !ok || !strings.Contains(cmd, "claude") {
 		t.Errorf("claude preset: got %q ok=%v", cmd, ok)
 	}
-	if cmd, ok := (ProjectConfig{LandingCmd: "tmux attach"}).LandingCommand(); !ok || cmd != "tmux attach" {
-		t.Errorf("landing_cmd: got %q ok=%v", cmd, ok)
+	if cmd, ok := (ProjectConfig{LobbyCmd: "tmux attach"}).LobbyCommand(); !ok || cmd != "tmux attach" {
+		t.Errorf("lobby_cmd: got %q ok=%v", cmd, ok)
 	}
 }
 
-func TestLoadProjectLandingValidation(t *testing.T) {
+func TestLoadProjectLobbyValidation(t *testing.T) {
 	dir := t.TempDir()
 
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("landing: sideways\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("lobby: sideways\n"), 0o644)
 	if _, err := LoadProject(dir); err == nil {
-		t.Fatal("expected error for unknown landing value")
+		t.Fatal("expected error for unknown lobby value")
 	}
 
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("landing: claude\nlanding_cmd: echo hi\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("lobby: claude\nlobby_cmd: echo hi\n"), 0o644)
 	if _, err := LoadProject(dir); err == nil {
-		t.Fatal("expected error when both landing and landing_cmd are set")
+		t.Fatal("expected error when both lobby and lobby_cmd are set")
 	}
 
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("landing_cmd: tmux new -A -s {{HOSTNAME}}\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("lobby_cmd: tmux new -A -s {{HOSTNAME}}\n"), 0o644)
 	if _, err := LoadProject(dir); err != nil {
 		t.Fatal(err)
 	}
