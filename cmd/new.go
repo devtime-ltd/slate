@@ -102,6 +102,8 @@ func createWorkspace(name, branch string, bg, cd, adopt bool) error {
 	// the worktree may carry its own slate.yml (existing branch, --adopt)
 	cfg, err = config.LoadProjectForWorkspace(mainRoot, wsDir)
 	if err != nil {
+		// roll back the just-created worktree so a retry isn't stuck on "already exists"
+		workspace.RemoveWorktree(wsDir)
 		return err
 	}
 	warnIfWorkspaceConfigDiffers(mainRoot, wsDir)

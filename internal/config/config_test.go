@@ -276,3 +276,17 @@ func TestLoadProjectLobbyValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLoadProjectRemovedKeysWarnNotReject(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("scaffold: laravel\nagent: claude\nclaude_args: [--foo]\n"), 0o644)
+
+	// old branches carry these keys in committed slate.ymls: must load fine
+	cfg, err := LoadProject(dir)
+	if err != nil {
+		t.Fatalf("removed keys must warn, not reject: %v", err)
+	}
+	if cfg.Scaffold != "laravel" {
+		t.Errorf("config should still load, got %+v", cfg)
+	}
+}

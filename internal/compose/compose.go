@@ -33,7 +33,10 @@ func buildCmd(env Env, interactive bool, args ...string) *exec.Cmd {
 	if _, err := os.Stat(filesOverride); err == nil {
 		cmdArgs = append(cmdArgs, "-f", filesOverride)
 	}
-	cmdArgs = append(cmdArgs, "--env-file", filepath.Join(env.WorkspaceDir, ".env.container"))
+	// only when present: down/rm must work on half-provisioned workspaces
+	if envFile := filepath.Join(env.WorkspaceDir, ".env.container"); fileStatOK(envFile) {
+		cmdArgs = append(cmdArgs, "--env-file", envFile)
+	}
 	cmdArgs = append(cmdArgs, args...)
 
 	cmd := exec.Command("docker", cmdArgs...)
@@ -52,6 +55,11 @@ func buildCmd(env Env, interactive bool, args ...string) *exec.Cmd {
 	)
 
 	return cmd
+}
+
+func fileStatOK(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func Run(env Env, args ...string) error {
