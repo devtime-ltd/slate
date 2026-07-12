@@ -73,7 +73,7 @@ func createWorkspace(name, branch string, bg, cd, adopt bool) error {
 	}
 
 	if _, err := os.Stat(wsDir); err == nil {
-		return fmt.Errorf("workspace '%s' already exists at %s", name, wsDir)
+		return fmt.Errorf("workspace '%s' already exists at %s\nResume it with `slate up %s`, or free the name with `slate rm %s` first", name, wsDir, name, name)
 	}
 
 	wsRoot, err := workspace.WorkspacesRoot()
