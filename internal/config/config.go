@@ -261,13 +261,17 @@ func LoadProject(dir string) (ProjectConfig, error) {
 	if cfg.LobbyCmd != "" && cfg.Lobby != "" {
 		return cfg, fmt.Errorf("slate.yml: set lobby or lobby_cmd, not both")
 	}
+	// warn, don't reject: old branches carry these keys in committed slate.ymls
 	for _, key := range []string{"agent", "claude_args"} {
-		if _, ok := cfg.Extra[key]; ok {
-			return cfg, fmt.Errorf("slate.yml: `%s` was removed; sessions now run on the host via `lobby: claude` or `lobby_cmd` (see README)", key)
+		if _, ok := cfg.Extra[key]; ok && !warnedRemovedKeys[key] {
+			warnedRemovedKeys[key] = true
+			fmt.Fprintf(os.Stderr, "  note: slate.yml `%s` was removed and is ignored; sessions now run on the host via `lobby: claude` or `lobby_cmd`\n", key)
 		}
 	}
 	return cfg, nil
 }
+
+var warnedRemovedKeys = map[string]bool{}
 
 // LoadProjectForWorkspace prefers the worktree's slate.yml so a branch can
 // test config changes; `project:` identity stays pinned to the main checkout.
