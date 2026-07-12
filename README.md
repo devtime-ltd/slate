@@ -219,6 +219,8 @@ landing_cmd: tmux new-session -A -s {{HOSTNAME}} 'claude --continue || claude --
 
 With that recipe, `slate land` from any terminal re-attaches to the workspace's running session (`tmux new -A` is attach-or-create), killing your terminal doesn't kill the session, and detaching after `new`/`up` leaves you in the workspace shell.
 
+Because `landing_cmd` executes on your host from a repo-tracked file, it needs one-time approval per project: slate shows the exact command and asks before the first run (and again whenever the command changes), remembering consent outside the repo. Presets are slate-shipped and exempt. Non-interactive runs never prompt: an unapproved command is skipped with a warning.
+
 The landing runs on your **host**: your normal claude login, skills, MCPs, and git access all apply. The blast-radius protection stays where it always was, in the containers that run the app and its dependency installs.
 
 ### Slate for agents
