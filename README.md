@@ -65,7 +65,7 @@ Tools:
   slate cd [name]                 Spawn a sub-shell rooted at the workspace dir
   slate code [name]               Open workspace in your editor
   slate shell [name]              Bash shell in app container
-  slate land [name]               Run the landing command in a workspace (see Landing)
+  slate lobby [name]              Run the lobby command in a workspace (see Lobby)
   slate exec [-s svc] -- <cmd>    Run an arbitrary command in a container (-i for a TTY)
   slate logs [name] [svc]         Tail logs (default: all services)
   slate proxy                     Manage the HTTPS proxy
@@ -199,29 +199,29 @@ tools:
 
 User-defined tools in `slate.yml` are always exec tools (run a command in a container).
 
-## Landing: what `new`/`up` drop you into
+## Lobby: what `new`/`up` drop you into
 
-When provisioning finishes at an interactive terminal, slate drops you into the workspace (the `auto_cd` behaviour). `landing` in `slate.yml` picks what runs first, and `slate land [name]` runs the same thing on demand from anywhere:
+When provisioning finishes at an interactive terminal, slate drops you into the workspace (the `auto_cd` behaviour). `lobby` in `slate.yml` picks what runs first, and `slate lobby [name]` runs the same thing on demand from anywhere:
 
 ```yaml
-landing: claude    # preset: continue the worktree's latest claude session,
+lobby: claude    # preset: continue the worktree's latest claude session,
                    # or start a fresh one named <project>--<workspace>
-# landing: shell   # default: just a shell in the worktree
-# landing: none    # never drop into anything
+# lobby: shell   # default: just a shell in the worktree
+# lobby: none    # never drop into anything
 ```
 
-For anything custom, `landing_cmd` runs an arbitrary command in the worktree (then drops to the shell when it exits). `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` are expanded, and it runs via `sh -c` with `SLATE_WORKSPACE` set:
+For anything custom, `lobby_cmd` runs an arbitrary command in the worktree (then drops to the shell when it exits). `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` are expanded, and it runs via `sh -c` with `SLATE_WORKSPACE` set:
 
 ```yaml
 # a session that survives your terminal app and allows multiple attachments
-landing_cmd: tmux new-session -A -s {{HOSTNAME}} 'claude --continue || claude --name "{{HOSTNAME}}"'
+lobby_cmd: tmux new-session -A -s {{HOSTNAME}} 'claude --continue || claude --name "{{HOSTNAME}}"'
 ```
 
-With that recipe, `slate land` from any terminal re-attaches to the workspace's running session (`tmux new -A` is attach-or-create), killing your terminal doesn't kill the session, and detaching after `new`/`up` leaves you in the workspace shell.
+With that recipe, `slate lobby` from any terminal re-attaches to the workspace's running session (`tmux new -A` is attach-or-create), killing your terminal doesn't kill the session, and detaching after `new`/`up` leaves you in the workspace shell.
 
-Because `landing_cmd` executes on your host from a repo-tracked file, it needs one-time approval per project: slate shows the exact command and asks before the first run (and again whenever the command changes), remembering consent outside the repo. Presets are slate-shipped and exempt. Non-interactive runs never prompt: an unapproved command is skipped with a warning.
+Because `lobby_cmd` executes on your host from a repo-tracked file, it needs one-time approval per project: slate shows the exact command and asks before the first run (and again whenever the command changes), remembering consent outside the repo. Presets are slate-shipped and exempt. Non-interactive runs never prompt: an unapproved command is skipped with a warning.
 
-The landing runs on your **host**: your normal claude login, skills, MCPs, and git access all apply. The blast-radius protection stays where it always was, in the containers that run the app and its dependency installs.
+The lobby runs on your **host**: your normal claude login, skills, MCPs, and git access all apply. The blast-radius protection stays where it always was, in the containers that run the app and its dependency installs.
 
 ### Slate for agents
 

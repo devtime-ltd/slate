@@ -148,7 +148,7 @@ func createWorkspace(name, branch string, bg, cd, adopt bool) error {
 	}
 
 	if cd {
-		return landAt(cfg, mainRoot, name, wsDir)
+		return lobbyAt(cfg, mainRoot, name, wsDir)
 	}
 	return nil
 }

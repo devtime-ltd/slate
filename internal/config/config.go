@@ -44,34 +44,34 @@ type DBTool struct {
 func (DBTool) isTool() {}
 
 type ProjectConfig struct {
-	Scaffold   string              `yaml:"scaffold"`
-	Project    string              `yaml:"project"`
-	Database   string              `yaml:"database"`
-	Editor     string              `yaml:"editor"`
-	New        string              `yaml:"new"`
-	Up         string              `yaml:"up"`
-	Env        map[string]string   `yaml:"env"`
-	AppPort    int                 `yaml:"app_port"`
-	VitePort   int                 `yaml:"vite_port"`
-	Tools      map[string]ExecTool `yaml:"tools"`
-	Landing    string              `yaml:"landing"`
-	LandingCmd string              `yaml:"landing_cmd"`
-	Extra      map[string]any      `yaml:",inline"`
+	Scaffold string              `yaml:"scaffold"`
+	Project  string              `yaml:"project"`
+	Database string              `yaml:"database"`
+	Editor   string              `yaml:"editor"`
+	New      string              `yaml:"new"`
+	Up       string              `yaml:"up"`
+	Env      map[string]string   `yaml:"env"`
+	AppPort  int                 `yaml:"app_port"`
+	VitePort int                 `yaml:"vite_port"`
+	Tools    map[string]ExecTool `yaml:"tools"`
+	Lobby    string              `yaml:"lobby"`
+	LobbyCmd string              `yaml:"lobby_cmd"`
+	Extra    map[string]any      `yaml:",inline"`
 }
 
-// landingPresets are named landing commands selectable via `landing:`;
-// `landing_cmd` supplies a custom one.
-var landingPresets = map[string]string{
+// lobbyPresets are named lobby commands selectable via `lobby:`;
+// `lobby_cmd` supplies a custom one.
+var lobbyPresets = map[string]string{
 	"claude": `claude --continue || claude --name "{{HOSTNAME}}"`,
 }
 
-// LandingCommand returns the command to run in the workspace on landing,
+// LobbyCommand returns the command to run in the workspace on lobby,
 // and whether one is configured (false means plain shell/none).
-func (c ProjectConfig) LandingCommand() (string, bool) {
-	if c.LandingCmd != "" {
-		return c.LandingCmd, true
+func (c ProjectConfig) LobbyCommand() (string, bool) {
+	if c.LobbyCmd != "" {
+		return c.LobbyCmd, true
 	}
-	if preset, ok := landingPresets[c.Landing]; ok {
+	if preset, ok := lobbyPresets[c.Lobby]; ok {
 		return preset, true
 	}
 	return "", false
@@ -251,19 +251,19 @@ func LoadProject(dir string) (ProjectConfig, error) {
 	if cfg.VitePort == 0 {
 		cfg.VitePort = 5173
 	}
-	switch cfg.Landing {
+	switch cfg.Lobby {
 	case "", "shell", "none":
 	default:
-		if _, ok := landingPresets[cfg.Landing]; !ok {
-			return cfg, fmt.Errorf("slate.yml: invalid landing %q (valid: shell, none, claude; or set landing_cmd for a custom command)", cfg.Landing)
+		if _, ok := lobbyPresets[cfg.Lobby]; !ok {
+			return cfg, fmt.Errorf("slate.yml: invalid lobby %q (valid: shell, none, claude; or set lobby_cmd for a custom command)", cfg.Lobby)
 		}
 	}
-	if cfg.LandingCmd != "" && cfg.Landing != "" {
-		return cfg, fmt.Errorf("slate.yml: set landing or landing_cmd, not both")
+	if cfg.LobbyCmd != "" && cfg.Lobby != "" {
+		return cfg, fmt.Errorf("slate.yml: set lobby or lobby_cmd, not both")
 	}
 	for _, key := range []string{"agent", "claude_args"} {
 		if _, ok := cfg.Extra[key]; ok {
-			return cfg, fmt.Errorf("slate.yml: `%s` was removed; sessions now run on the host via `landing: claude` or `landing_cmd` (see README)", key)
+			return cfg, fmt.Errorf("slate.yml: `%s` was removed; sessions now run on the host via `lobby: claude` or `lobby_cmd` (see README)", key)
 		}
 	}
 	return cfg, nil

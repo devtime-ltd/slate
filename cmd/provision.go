@@ -76,13 +76,13 @@ func runProvision(cmd *cobra.Command, args []string) error {
 
 // runBackgroundProvision forks the bg provisioner and then either drops into
 // a shell at the workspace dir (cd=true) or prints the path and exits. Never
-// the agent landing: the containers are still provisioning.
+// the lobby command: the containers are still provisioning.
 func runBackgroundProvision(cfg config.ProjectConfig, name, wsDir string, opts provisionOpts, cd bool) error {
 	if err := detachProvision(name, wsDir, opts); err != nil {
 		return err
 	}
-	if _, ok := cfg.LandingCommand(); ok {
-		fmt.Println("Run `slate land` once provisioning completes.")
+	if _, ok := cfg.LobbyCommand(); ok {
+		fmt.Println("Run `slate lobby` once provisioning completes.")
 	}
 	if cd {
 		return spawnShellAt(wsDir)
