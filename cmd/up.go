@@ -115,7 +115,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	if cd {
-		return landAt(cfg, name, wsDir)
+		return landAt(cfg, mainRoot, name, wsDir)
 	}
 	return nil
 }

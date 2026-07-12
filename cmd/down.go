@@ -42,7 +42,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Stopping %s...\n", hostname)
-	compose.Run(env, "down")
+	compose.Run(env, "down", "--remove-orphans")
 
 	mainRoot, _ := workspace.MainRoot()
 	cfg, _ := config.LoadProject(mainRoot)

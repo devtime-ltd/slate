@@ -84,7 +84,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Destroying %s...\n", hostname)
-	compose.Run(env, "down", "-v")
+	compose.Run(env, "down", "-v", "--remove-orphans")
 
 	cfg, _ := config.LoadProject(mainRoot)
 	proxy.Unregister(hostname, scaffoldSubdomains(cfg))

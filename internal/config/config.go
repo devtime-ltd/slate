@@ -261,6 +261,11 @@ func LoadProject(dir string) (ProjectConfig, error) {
 	if cfg.LandingCmd != "" && cfg.Landing != "" {
 		return cfg, fmt.Errorf("slate.yml: set landing or landing_cmd, not both")
 	}
+	for _, key := range []string{"agent", "claude_args"} {
+		if _, ok := cfg.Extra[key]; ok {
+			return cfg, fmt.Errorf("slate.yml: `%s` was removed; sessions now run on the host via `landing: claude` or `landing_cmd` (see README)", key)
+		}
+	}
 	return cfg, nil
 }
 

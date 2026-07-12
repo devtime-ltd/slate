@@ -94,7 +94,7 @@ func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg co
 
 	if opts.wipe {
 		fmt.Printf("Wiping containers and volumes for %s...\n", hostname)
-		if err := compose.Run(env, "down", "-v"); err != nil {
+		if err := compose.Run(env, "down", "-v", "--remove-orphans"); err != nil {
 			return fmt.Errorf("compose down failed: %w", err)
 		}
 	}
