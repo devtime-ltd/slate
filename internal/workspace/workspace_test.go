@@ -162,3 +162,108 @@ prunable gitdir file points to non-existent location
 	}
 }
 
+func TestParseWorktrees(t *testing.T) {
+	porcelain := `worktree /repo/main
+HEAD abc123
+branch refs/heads/main
+
+worktree /repo/.slate/workspaces/gone
+HEAD def456
+branch refs/heads/slate/gone
+prunable gitdir file points to non-existent location
+
+worktree /repo/.slate/workspaces/detached
+HEAD 789abc
+detached
+`
+	entries := parseWorktrees(porcelain)
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d: %+v", len(entries), entries)
+	}
+	want := []worktreeEntry{
+		{"/repo/main", "main"},
+		{"/repo/.slate/workspaces/gone", "slate/gone"},
+		{"/repo/.slate/workspaces/detached", ""},
+	}
+	for i, w := range want {
+		if entries[i] != w {
+			t.Errorf("entry %d = %+v, want %+v", i, entries[i], w)
+		}
+	}
+}
+
+func TestBranchSafety(t *testing.T) {
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	origin := t.TempDir()
+	git(origin, "init", "-q", "--bare", "-b", "main")
+
+	repo := t.TempDir()
+	git(repo, "init", "-q", "-b", "main")
+	git(repo, "config", "user.email", "t@example.com")
+	git(repo, "config", "user.name", "t")
+
+	commit := func(file string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, file), []byte(file+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		git(repo, "add", ".")
+		git(repo, "commit", "-qm", file)
+	}
+
+	commit("base.txt")
+	git(repo, "remote", "add", "origin", origin)
+	git(repo, "push", "-qu", "origin", "main")
+
+	git(repo, "checkout", "-qb", "slate/pushed")
+	commit("a.txt")
+	git(repo, "push", "-qu", "origin", "slate/pushed")
+
+	git(repo, "checkout", "-qb", "slate/local", "main")
+	commit("b.txt")
+
+	git(repo, "checkout", "-qb", "slate/ahead", "main")
+	commit("c.txt")
+	git(repo, "push", "-qu", "origin", "slate/ahead")
+	commit("c2.txt")
+
+	git(repo, "checkout", "-qb", "slate/merged", "main")
+	commit("d.txt")
+	git(repo, "checkout", "-q", "main")
+	git(repo, "merge", "-q", "--no-ff", "-m", "merge", "slate/merged")
+
+	// Pushed, then the remote-tracking ref vanished (remote branch deleted).
+	git(repo, "checkout", "-qb", "slate/gone", "main")
+	commit("e.txt")
+	git(repo, "push", "-qu", "origin", "slate/gone")
+	git(repo, "update-ref", "-d", "refs/remotes/origin/slate/gone")
+
+	git(repo, "checkout", "-q", "main")
+
+	cases := []struct {
+		branch string
+		safe   bool
+		reason string
+	}{
+		{"slate/pushed", true, "in sync with origin/slate/pushed"},
+		{"slate/local", false, "never pushed"},
+		{"slate/ahead", false, "unpushed commits"},
+		{"slate/merged", true, "merged into main"},
+		{"slate/gone", false, "upstream gone, possibly squash-merged"},
+		{"slate/nonexistent", false, "no such branch"},
+	}
+	for _, c := range cases {
+		safe, reason := BranchSafety(repo, c.branch)
+		if safe != c.safe || reason != c.reason {
+			t.Errorf("%s: got (%v, %q), want (%v, %q)", c.branch, safe, reason, c.safe, c.reason)
+		}
+	}
+}

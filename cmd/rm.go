@@ -15,7 +15,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var rmForce bool
+var (
+	rmForce      bool
+	rmKeepBranch bool
+)
 
 var rmCmd = &cobra.Command{
 	Use:   "rm [name]",
@@ -26,6 +29,7 @@ var rmCmd = &cobra.Command{
 
 func init() {
 	rmCmd.Flags().BoolVarP(&rmForce, "force", "f", false, "Skip confirmation prompt")
+	rmCmd.Flags().BoolVar(&rmKeepBranch, "keep-branch", false, "Keep the workspace branch even if pushed/merged")
 	rmCmd.GroupID = "workspace"
 	rootCmd.AddCommand(rmCmd)
 }
@@ -90,9 +94,16 @@ func runRm(cmd *cobra.Command, args []string) error {
 	cfg, _ := config.LoadProject(mainRoot)
 	proxy.Unregister(hostname, scaffoldSubdomains(cfg))
 
-	workspace.RemoveWorktree(wsDir)
+	branch := workspace.WorktreeBranch(wsDir)
+	removeErr := workspace.RemoveWorktree(wsDir)
+	if removeErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", removeErr)
+	}
 
 	fmt.Printf(""+tick()+" %s removed\n", hostname)
+	if removeErr == nil && !rmKeepBranch {
+		cleanupBranch(mainRoot, branch)
+	}
 
 	if cwdInside && mainRoot != "" {
 		if insideSlateShell() {
@@ -144,6 +155,12 @@ func rmOrphaned(name, wsDir, hostname string) error {
 	cfg, _ := config.LoadProject(mainRoot)
 	proxy.Unregister(hostname, scaffoldSubdomains(cfg))
 
+	// The stale registration still knows its branch; read it before pruning.
+	branch := workspace.WorktreeBranch(wsDir)
+	if branch == "" {
+		branch = "slate/" + name
+	}
+
 	if registered {
 		if err := workspace.PruneWorktrees(); err != nil {
 			return err
@@ -151,7 +168,34 @@ func rmOrphaned(name, wsDir, hostname string) error {
 	}
 
 	fmt.Printf(""+tick()+" %s removed\n", hostname)
+	if !rmKeepBranch {
+		cleanupBranch(mainRoot, branch)
+	}
 	return nil
+}
+
+// cleanupBranch deletes the workspace's branch when its commits are provably
+// recoverable (pushed or merged), otherwise says why it was kept.
+func cleanupBranch(mainRoot, branch string) {
+	if branch == "" || mainRoot == "" {
+		return
+	}
+	safe, reason := workspace.BranchSafety(mainRoot, branch)
+	if reason == "no such branch" {
+		return
+	}
+	if workspace.CheckedOutBranches()[branch] {
+		return // in use by another worktree; not this workspace's to delete
+	}
+	if !safe {
+		fmt.Printf("  kept branch %s (%s); delete with `git branch -D %s`\n", branch, reason, branch)
+		return
+	}
+	if err := workspace.DeleteBranch(mainRoot, branch); err != nil {
+		fmt.Printf("  warning: could not delete branch %s: %v\n", branch, err)
+		return
+	}
+	fmt.Printf("  deleted branch %s (%s)\n", branch, reason)
 }
 
 func dockerProjectHasResources(project string) bool {

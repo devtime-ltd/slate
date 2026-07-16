@@ -178,6 +178,23 @@ func RemoveWorktree(dir string) error {
 	return nil
 }
 
+type worktreeEntry struct {
+	path   string
+	branch string // short name, empty for detached HEAD
+}
+
+func parseWorktrees(porcelain string) []worktreeEntry {
+	var entries []worktreeEntry
+	for _, line := range strings.Split(porcelain, "\n") {
+		if path, ok := strings.CutPrefix(line, "worktree "); ok {
+			entries = append(entries, worktreeEntry{path: path})
+		} else if ref, ok := strings.CutPrefix(line, "branch "); ok && len(entries) > 0 {
+			entries[len(entries)-1].branch = strings.TrimPrefix(ref, "refs/heads/")
+		}
+	}
+	return entries
+}
+
 // WorktreeRegistered reports whether dir is still registered as a worktree.
 // A registration outlives a manual `rm -rf` of the directory.
 func WorktreeRegistered(dir string) bool {
@@ -190,18 +207,127 @@ func WorktreeRegistered(dir string) bool {
 
 func worktreeListed(porcelain, dir string) bool {
 	target := filepath.Clean(dir)
-	for _, line := range strings.Split(porcelain, "\n") {
-		if path, ok := strings.CutPrefix(line, "worktree "); ok && filepath.Clean(path) == target {
+	for _, e := range parseWorktrees(porcelain) {
+		if filepath.Clean(e.path) == target {
 			return true
 		}
 	}
 	return false
 }
 
+// WorktreeBranch returns the branch checked out in the worktree at dir, or ""
+// (detached HEAD, or dir not registered). Stale registrations left by a manual
+// `rm -rf` still carry their branch, so this works for those too.
+func WorktreeBranch(dir string) string {
+	out, err := runGit("worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	target := filepath.Clean(dir)
+	for _, e := range parseWorktrees(out) {
+		if filepath.Clean(e.path) == target {
+			return e.branch
+		}
+	}
+	return ""
+}
+
+// CheckedOutBranches returns the branches attached to any registered worktree,
+// including the main checkout and stale registrations.
+func CheckedOutBranches() map[string]bool {
+	out, err := runGit("worktree", "list", "--porcelain")
+	if err != nil {
+		return nil
+	}
+	inUse := map[string]bool{}
+	for _, e := range parseWorktrees(out) {
+		if e.branch != "" {
+			inUse[e.branch] = true
+		}
+	}
+	return inUse
+}
+
 // PruneWorktrees drops registrations whose directories no longer exist.
 func PruneWorktrees() error {
 	if out, err := runGit("worktree", "prune"); err != nil {
 		return fmt.Errorf("git worktree prune: %s", strings.TrimSpace(out))
+	}
+	return nil
+}
+
+// BranchesWithPrefix returns local branches whose names start with prefix.
+func BranchesWithPrefix(dir, prefix string) ([]string, error) {
+	out, err := gitOutputInDir(dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/"+prefix)
+	if err != nil {
+		return nil, fmt.Errorf("listing branches: %w", err)
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+// DefaultBranch returns the repo's default branch (via origin/HEAD, falling
+// back to main/master), or "" if none can be determined.
+func DefaultBranch(dir string) string {
+	if ref, err := gitOutputInDir(dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		return strings.TrimPrefix(ref, "origin/")
+	}
+	for _, b := range []string{"main", "master"} {
+		if _, err := gitOutputInDir(dir, "rev-parse", "--verify", "refs/heads/"+b); err == nil {
+			return b
+		}
+	}
+	return ""
+}
+
+// BranchSafety reports whether branch can be deleted without losing commits:
+// its tip is reachable from its upstream (pushed) or from the default branch
+// (merged). The reason is human-readable either way. No network calls; remote
+// state is judged from local remote-tracking refs.
+func BranchSafety(dir, branch string) (bool, string) {
+	sha, err := gitOutputInDir(dir, "rev-parse", "--verify", "refs/heads/"+branch)
+	if err != nil {
+		return false, "no such branch"
+	}
+
+	upstream, _ := gitOutputInDir(dir, "for-each-ref", "--format=%(upstream)", "refs/heads/"+branch)
+	upstreamGone := false
+	if upstream != "" {
+		short := strings.TrimPrefix(upstream, "refs/remotes/")
+		if upSha, err := gitOutputInDir(dir, "rev-parse", "--verify", upstream); err != nil {
+			upstreamGone = true
+		} else if upSha == sha {
+			return true, "in sync with " + short
+		} else if isAncestor(dir, sha, upSha) {
+			return true, "not ahead of " + short
+		}
+	}
+
+	if def := DefaultBranch(dir); def != "" && def != branch && isAncestor(dir, sha, "refs/heads/"+def) {
+		return true, "merged into " + def
+	}
+
+	switch {
+	case upstreamGone:
+		return false, "upstream gone, possibly squash-merged"
+	case upstream != "":
+		return false, "unpushed commits"
+	}
+	return false, "never pushed"
+}
+
+func isAncestor(dir, commit, ref string) bool {
+	_, err := gitOutputInDir(dir, "merge-base", "--is-ancestor", commit, ref)
+	return err == nil
+}
+
+func DeleteBranch(dir, branch string) error {
+	cmd := exec.Command("git", "branch", "-D", branch)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git branch -D: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
 }
