@@ -137,3 +137,28 @@ func TestValidateNameMaxLength(t *testing.T) {
 		t.Error("33-char name should be invalid")
 	}
 }
+
+func TestWorktreeListed(t *testing.T) {
+	porcelain := `worktree /repo/main
+HEAD abc123
+branch refs/heads/main
+
+worktree /repo/.slate/workspaces/this-week
+HEAD def456
+branch refs/heads/slate/this-week
+prunable gitdir file points to non-existent location
+`
+	if !worktreeListed(porcelain, "/repo/.slate/workspaces/this-week") {
+		t.Error("expected registered worktree to be found")
+	}
+	if !worktreeListed(porcelain, "/repo/.slate/workspaces/this-week/") {
+		t.Error("expected trailing-slash path to match after Clean")
+	}
+	if worktreeListed(porcelain, "/repo/.slate/workspaces/this") {
+		t.Error("prefix of a registered path must not match")
+	}
+	if worktreeListed(porcelain, "/repo/.slate/workspaces/other") {
+		t.Error("unregistered path must not match")
+	}
+}
+

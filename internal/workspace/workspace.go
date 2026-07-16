@@ -178,6 +178,34 @@ func RemoveWorktree(dir string) error {
 	return nil
 }
 
+// WorktreeRegistered reports whether dir is still registered as a worktree.
+// A registration outlives a manual `rm -rf` of the directory.
+func WorktreeRegistered(dir string) bool {
+	out, err := runGit("worktree", "list", "--porcelain")
+	if err != nil {
+		return false
+	}
+	return worktreeListed(out, dir)
+}
+
+func worktreeListed(porcelain, dir string) bool {
+	target := filepath.Clean(dir)
+	for _, line := range strings.Split(porcelain, "\n") {
+		if path, ok := strings.CutPrefix(line, "worktree "); ok && filepath.Clean(path) == target {
+			return true
+		}
+	}
+	return false
+}
+
+// PruneWorktrees drops registrations whose directories no longer exist.
+func PruneWorktrees() error {
+	if out, err := runGit("worktree", "prune"); err != nil {
+		return fmt.Errorf("git worktree prune: %s", strings.TrimSpace(out))
+	}
+	return nil
+}
+
 func runGit(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	// When --project targets a project the user isn't currently sitting in,

@@ -66,6 +66,24 @@ func Run(env Env, args ...string) error {
 	return buildCmd(env, false, args...).Run()
 }
 
+// DownProject tears down a compose project by name alone, resolving resources
+// via their com.docker.compose.project labels. This works without the compose
+// file, for workspaces whose directory no longer exists.
+func DownProject(project string, args ...string) error {
+	cmdArgs := append([]string{"compose", "-p", project, "down"}, args...)
+	cmd := exec.Command("docker", cmdArgs...)
+	// Compose falls back to any compose.yaml found in the CWD (or its
+	// parents), which would scope `down -v` to that file's resources. Run
+	// from an empty dir so it resolves purely by project label.
+	if dir, err := os.MkdirTemp("", "slate-down-"); err == nil {
+		defer os.RemoveAll(dir)
+		cmd.Dir = dir
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 func RunInteractive(env Env, args ...string) error {
 	return buildCmd(env, true, args...).Run()
 }

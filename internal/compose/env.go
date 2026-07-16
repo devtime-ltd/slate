@@ -9,6 +9,10 @@ import (
 	"github.com/devtime-ltd/slate/internal/workspace"
 )
 
+func ProjectName(hostname string) string {
+	return "slate__" + hostname
+}
+
 func NewEnv(name, wsDir, hostname string) (Env, error) {
 	entrypoint := filepath.Join(config.DataDir(), "entrypoint.sh")
 	if _, err := os.Stat(entrypoint); err != nil {
@@ -23,6 +27,6 @@ func NewEnv(name, wsDir, hostname string) (Env, error) {
 		MainRoot:       mainRoot,
 		WorkspaceDir:   wsDir,
 		WorkspaceName:  name,
-		ComposeProject: "slate__" + hostname,
+		ComposeProject: ProjectName(hostname),
 	}, nil
 }

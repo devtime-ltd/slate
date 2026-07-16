@@ -46,13 +46,14 @@ func runRm(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(wsDir); err != nil {
-		return fmt.Errorf("workspace '%s' not found", name)
-	}
 
 	hostname, err := resolveHostname(name)
 	if err != nil {
 		return err
+	}
+
+	if _, err := os.Stat(wsDir); err != nil {
+		return rmOrphaned(name, wsDir, hostname)
 	}
 
 	mainRoot, _ := workspace.MainRoot()
@@ -103,6 +104,68 @@ func runRm(cmd *cobra.Command, args []string) error {
 		return spawnShellAt(mainRoot)
 	}
 	return nil
+}
+
+// rmOrphaned cleans up after a workspace whose directory was deleted manually
+// (rm -rf instead of `slate rm`): labeled docker containers/volumes, the proxy
+// routes, and the stale git worktree registration.
+func rmOrphaned(name, wsDir, hostname string) error {
+	project := compose.ProjectName(hostname)
+	hasDocker := dockerProjectHasResources(project)
+	registered := workspace.WorktreeRegistered(wsDir)
+	if !hasDocker && !registered {
+		return fmt.Errorf("workspace '%s' not found", name)
+	}
+
+	var leftovers []string
+	if hasDocker {
+		leftovers = append(leftovers, "containers/volumes")
+	}
+	if registered {
+		leftovers = append(leftovers, "a stale worktree registration")
+	}
+
+	if !rmForce {
+		fmt.Printf("%s's directory is already gone but it left behind %s. Clean up? [y/N] ", name, strings.Join(leftovers, " and "))
+		reader := bufio.NewReader(os.Stdin)
+		answer, _ := reader.ReadString('\n')
+		if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+
+	fmt.Printf("Cleaning up %s...\n", hostname)
+	if hasDocker {
+		compose.DownProject(project, "-v", "--remove-orphans")
+	}
+
+	mainRoot, _ := workspace.MainRoot()
+	cfg, _ := config.LoadProject(mainRoot)
+	proxy.Unregister(hostname, scaffoldSubdomains(cfg))
+
+	if registered {
+		if err := workspace.PruneWorktrees(); err != nil {
+			return err
+		}
+	}
+
+	fmt.Printf(""+tick()+" %s removed\n", hostname)
+	return nil
+}
+
+func dockerProjectHasResources(project string) bool {
+	filter := "label=com.docker.compose.project=" + project
+	for _, args := range [][]string{
+		{"ps", "-aq", "--filter", filter},
+		{"volume", "ls", "-q", "--filter", filter},
+	} {
+		out, err := exec.Command("docker", args...).Output()
+		if err == nil && strings.TrimSpace(string(out)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // cwdIsInside reports whether the process CWD is at or under dir, resolving
