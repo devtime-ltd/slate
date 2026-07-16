@@ -49,5 +49,6 @@ func runDown(cmd *cobra.Command, args []string) error {
 	proxy.Unregister(hostname, scaffoldSubdomains(cfg))
 
 	fmt.Printf(""+tick()+" %s is down\n", hostname)
+	fmt.Printf("  Bring it back with `slate up %s`, or destroy it with `slate rm %s` if it's no longer needed.\n", name, name)
 	return nil
 }
