@@ -63,16 +63,19 @@ The Scaffold interface exposes a `Tools() map[string]config.Tool` method. `Tool`
 
 User-defined tools in `slate.yml` are always exec tools. Scaffolds can mix both.
 
-## Lobby (`lobby:` / `lobby_cmd:`)
+## Agent (`agent:`) + up hook (`up:`)
 
-`slate new`/`up` (and `slate lobby` on demand) can run a command in the fresh
-worktree before dropping to the shell: a named preset via `lobby:` (the
-`claude` preset continues/starts a host claude session named after the
-workspace) or any command via `lobby_cmd:` ({{WORKSPACE}}/{{PROJECT}}/
-{{HOSTNAME}} expanded, run through `sh -c` with SLATE_WORKSPACE set, behind
-the auto_cd/--cd TTY gate). Lobby runs on the HOST by design: sessions get
-the user's own login/skills/MCPs/git while app code and dependency installs
-stay containerised. Presets live in `config.lobbyPresets`.
+`agent:` is the command `slate agent [name]` runs in the worktree: a single
+command or a `[first-run, thereafter]` pair (first-run picked when
+SLATE_FRESH=1). `up:` runs after `new`/`up` before dropping to the shell
+(behind the auto_cd/--cd TTY gate); point it at `slate agent` to land in the
+agent, with `slate new` setting SLATE_FRESH=1 so the pair's first-run variant
+fires. Both run through `sh -c` with {{WORKSPACE}}/{{PROJECT}}/{{HOSTNAME}}
+expanded and SLATE_WORKSPACE/SLATE_PROJECT/SLATE_FRESH set. They execute on
+the HOST by design (the user's own login/skills/MCPs/git apply), so both
+fields are pinned to the MAIN checkout's slate.yml: the worktree copy is
+container-writable and must never drive host execution. Workspace-side edits
+to them are inert and surface a note (`config.HostExecPinned`).
 
 ## Scaffold interface checklist
 
@@ -168,7 +171,7 @@ Suggested order:
 | Caddy container (now) → embedded Caddy (P1) | Container removes Caddy install dep today; embedded removes container too |
 | Per-installation secret key for passwords | Same workspace name gives different passwords across installations |
 | Worktree slate.yml authoritative, `project:` pinned to main | Branches can test config changes before merging without forking a workspace's identity mid-life |
-| Lobby runs host-side (no in-container agent) | The user's own tooling/credentials apply; slate stays vendor-neutral; containers keep isolating app code and deps |
+| Agent/up run host-side (no in-container agent) | The user's own tooling/credentials apply; slate stays vendor-neutral; containers keep isolating app code and deps |
 | Hash-suffix on DB names | Safe across all databases (max 63 chars), unique per project+workspace+label |
 | `--bg` fast/slow split | Fast phase (worktree+scaffold) runs inline so editing starts immediately; slow phase (build+lifecycle) detaches with `Setsid` and survives parent close |
 | Lockfile-driven status (not in-memory) | Survives slate restarts, visible across shells, single source of truth for concurrency guards |

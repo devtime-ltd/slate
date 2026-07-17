@@ -56,14 +56,14 @@ func TestBuildLifecycleScriptNewThenUp(t *testing.T) {
 		t.Fatal("should contain migrate:fresh")
 	}
 	if composerIdx > freshIdx {
-		t.Error("composer install (from up) should come before migrate:fresh (from new)")
+		t.Error("composer install (from setup) should come before migrate:fresh (from fresh)")
 	}
 }
 
 func TestBuildLifecycleScriptScaffoldPlaceholder(t *testing.T) {
 	cfg := config.ProjectConfig{
 		Scaffold: "laravel",
-		Up:       "echo before\n{{SCAFFOLD_DEFAULT}}\necho after\n",
+		Setup:    "echo before\n{{SCAFFOLD_DEFAULT}}\necho after\n",
 	}
 	script := BuildLifecycleScript(cfg, false)
 
@@ -71,7 +71,7 @@ func TestBuildLifecycleScriptScaffoldPlaceholder(t *testing.T) {
 		t.Error("should contain pre-scaffold content")
 	}
 	if !strings.Contains(script, "composer install") {
-		t.Error("{{SCAFFOLD_DEFAULT}} should be expanded to default up script")
+		t.Error("{{SCAFFOLD_DEFAULT}} should be expanded to default setup script")
 	}
 	if !strings.Contains(script, "echo after") {
 		t.Error("should contain post-scaffold content")
@@ -81,7 +81,7 @@ func TestBuildLifecycleScriptScaffoldPlaceholder(t *testing.T) {
 func TestBuildLifecycleScriptFullOverride(t *testing.T) {
 	cfg := config.ProjectConfig{
 		Scaffold: "laravel",
-		Up:       "custom-command\n",
+		Setup:    "custom-command\n",
 	}
 	script := BuildLifecycleScript(cfg, false)
 

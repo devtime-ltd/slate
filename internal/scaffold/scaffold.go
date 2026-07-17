@@ -401,12 +401,12 @@ func GenerateEnvContainer(workspaceDir, mainRoot, hostname, project, workspace s
 }
 
 // BuildLifecycleScript assembles the full script for a lifecycle phase.
-// slate new: up (install deps + migrate) then new (fresh DB)
-// slate up:  up (install deps + migrate)
+// slate new: setup (install deps + migrate) then fresh (fresh DB)
+// slate up:  setup (install deps + migrate)
 func BuildLifecycleScript(cfg config.ProjectConfig, isNew bool) string {
 	var parts []string
 
-	upScript := cfg.Up
+	upScript := cfg.Setup
 	defaultUp := config.DefaultSetupForScaffold(cfg.Scaffold)
 	if upScript == "" {
 		upScript = defaultUp
@@ -418,7 +418,7 @@ func BuildLifecycleScript(cfg config.ProjectConfig, isNew bool) string {
 	}
 
 	if isNew {
-		newScript := cfg.New
+		newScript := cfg.Fresh
 		defaultNew := config.DefaultFreshSetupForScaffold(cfg.Scaffold)
 		if newScript == "" {
 			newScript = defaultNew

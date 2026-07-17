@@ -68,8 +68,8 @@ func generateSlateYml(scaffold string) string {
 		return `scaffold: laravel
 
 # Override lifecycle (optional, scaffold provides sensible defaults):
-# new: |    # runs on slate new (then up runs after)
-# up: |     # runs on every slate new / slate up
+# setup: |   # runs in the container on every slate new / slate up
+# fresh: |   # runs after setup on slate new and slate up --fresh
 
 # apt_packages: [ghostscript, imagemagick, libmagickwand-dev]
 # php_extensions: [imagick]
@@ -78,8 +78,8 @@ func generateSlateYml(scaffold string) string {
 		return `scaffold: nextjs
 
 # Override lifecycle (optional, scaffold provides sensible defaults):
-# new: |    # runs on slate new (then up runs after)
-# up: |     # runs on every slate new / slate up
+# setup: |   # runs in the container on every slate new / slate up
+# fresh: |   # runs after setup on slate new and slate up --fresh
 `
 	default:
 		return fmt.Sprintf("scaffold: %s\n", scaffold)

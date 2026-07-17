@@ -38,6 +38,9 @@ func warnIfWorkspaceConfigDiffers(mainRoot, wsDir string) {
 	if note := workspaceConfigNote(mainRoot, wsDir); note != "" {
 		fmt.Fprintln(os.Stderr, note)
 	}
+	if keys := config.HostExecPinned(mainRoot, wsDir); len(keys) > 0 {
+		fmt.Fprintf(os.Stderr, "  note: this workspace's slate.yml changes `%s`; host commands always come from the main checkout's slate.yml, so the change has no effect until it lands there\n", strings.Join(keys, "` and `"))
+	}
 }
 
 // resolveAutoCd returns the explicit flag value if the user passed --cd /

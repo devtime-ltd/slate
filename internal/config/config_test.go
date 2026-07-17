@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -150,9 +151,9 @@ files:
 func TestLoadProjectLifecycleHooks(t *testing.T) {
 	dir := t.TempDir()
 	yaml := `scaffold: laravel
-new: |
+fresh: |
   php artisan migrate:fresh
-up: |
+setup: |
   composer install
   {{scaffold}}
 `
@@ -162,11 +163,11 @@ up: |
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.New == "" {
-		t.Error("New hook should be set")
+	if cfg.Fresh == "" {
+		t.Error("Fresh hook should be set")
 	}
-	if cfg.Up == "" {
-		t.Error("Up hook should be set")
+	if cfg.Setup == "" {
+		t.Error("Setup hook should be set")
 	}
 }
 
@@ -219,74 +220,92 @@ func TestLoadProjectForWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.LobbyCmd != "" || cfg.Project != "mainname" {
+	if cfg.Project != "mainname" {
 		t.Errorf("want main config, got %+v", cfg)
 	}
 
-	// workspace slate.yml wins, but project identity stays main's
-	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nproject: renamed\nlobby_cmd: echo hi\n"), 0o644)
+	// workspace slate.yml wins, but project identity and host-exec fields stay main's
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nproject: renamed\napp_port: 9090\nagent: evil\nup: evil hook\n"), 0o644)
 	cfg, err = LoadProjectForWorkspace(mainRoot, wsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.LobbyCmd != "echo hi" {
-		t.Error("workspace lobby_cmd should apply")
+	if cfg.AppPort != 9090 {
+		t.Error("workspace container-side config should apply")
 	}
 	if cfg.Project != "mainname" {
 		t.Errorf("project should stay pinned to main, got %q", cfg.Project)
 	}
+	if !cfg.Agent.IsZero() || cfg.Up != "" {
+		t.Errorf("agent/up should stay pinned to main, got %+v / %q", cfg.Agent, cfg.Up)
+	}
+	if pinned := HostExecPinned(mainRoot, wsDir); !slices.Equal(pinned, []string{"agent", "up"}) {
+		t.Errorf("HostExecPinned = %v, want [agent up]", pinned)
+	}
+
+	// main's host-exec fields apply inside the workspace
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: laravel\nproject: mainname\nagent: claude\nup: slate agent\n"), 0o644)
+	cfg, err = LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Again != "claude" || cfg.Up != "slate agent" {
+		t.Errorf("main agent/up should apply, got %+v / %q", cfg.Agent, cfg.Up)
+	}
+
+	// a workspace slate.yml that simply omits the fields isn't "changing" them
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\n"), 0o644)
+	if pinned := HostExecPinned(mainRoot, wsDir); len(pinned) != 0 {
+		t.Errorf("HostExecPinned = %v, want none for omitted fields", pinned)
+	}
 
 	// invalid workspace config errors rather than silently using main's
-	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("lobby: sideways\n"), 0o644)
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("agent: {bad: map}\n"), 0o644)
 	if _, err := LoadProjectForWorkspace(mainRoot, wsDir); err == nil {
 		t.Error("invalid workspace slate.yml should error")
 	}
 }
 
-func TestLobbyCommand(t *testing.T) {
-	if _, ok := (ProjectConfig{}).LobbyCommand(); ok {
-		t.Error("no lobby config: want no command")
-	}
-	if _, ok := (ProjectConfig{Lobby: "shell"}).LobbyCommand(); ok {
-		t.Error("lobby shell: want no command")
-	}
-	if cmd, ok := (ProjectConfig{Lobby: "claude"}).LobbyCommand(); !ok || !strings.Contains(cmd, "claude") {
-		t.Errorf("claude preset: got %q ok=%v", cmd, ok)
-	}
-	if cmd, ok := (ProjectConfig{LobbyCmd: "tmux attach"}).LobbyCommand(); !ok || cmd != "tmux attach" {
-		t.Errorf("lobby_cmd: got %q ok=%v", cmd, ok)
-	}
-}
-
-func TestLoadProjectLobbyValidation(t *testing.T) {
-	dir := t.TempDir()
-
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("lobby: sideways\n"), 0o644)
-	if _, err := LoadProject(dir); err == nil {
-		t.Fatal("expected error for unknown lobby value")
+func TestAgentCmdUnmarshal(t *testing.T) {
+	load := func(t *testing.T, yml string) (ProjectConfig, error) {
+		t.Helper()
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "slate.yml"), []byte(yml), 0o644)
+		return LoadProject(dir)
 	}
 
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("lobby: claude\nlobby_cmd: echo hi\n"), 0o644)
-	if _, err := LoadProject(dir); err == nil {
-		t.Fatal("expected error when both lobby and lobby_cmd are set")
-	}
-
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("lobby_cmd: tmux new -A -s {{HOSTNAME}}\n"), 0o644)
-	if _, err := LoadProject(dir); err != nil {
+	cfg, err := load(t, "agent: claude\n")
+	if err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestLoadProjectRemovedKeysWarnNotReject(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("scaffold: laravel\nagent: claude\nclaude_args: [--foo]\n"), 0o644)
-
-	// old branches carry these keys in committed slate.ymls: must load fine
-	cfg, err := LoadProject(dir)
-	if err != nil {
-		t.Fatalf("removed keys must warn, not reject: %v", err)
+	if cfg.Agent.First != "claude" || cfg.Agent.Again != "claude" {
+		t.Errorf("scalar agent: got %+v", cfg.Agent)
 	}
-	if cfg.Scaffold != "laravel" {
-		t.Errorf("config should still load, got %+v", cfg)
+
+	cfg, err = load(t, "agent:\n  - claude --name \"{{PROJECT}}--{{WORKSPACE}}\"\n  - claude --continue\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.First != `claude --name "{{PROJECT}}--{{WORKSPACE}}"` || cfg.Agent.Again != "claude --continue" {
+		t.Errorf("pair agent: got %+v", cfg.Agent)
+	}
+
+	cfg, err = load(t, "agent: [only]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.First != "only" || cfg.Agent.Again != "only" {
+		t.Errorf("single-item agent: got %+v", cfg.Agent)
+	}
+
+	if _, err := load(t, "agent: [a, b, c]\n"); err == nil {
+		t.Error("3-item agent should error")
+	}
+	if _, err := load(t, "agent: {cmd: claude}\n"); err == nil {
+		t.Error("map agent should error")
+	}
+
+	if !(ProjectConfig{}).Agent.IsZero() {
+		t.Error("zero AgentCmd should report IsZero")
 	}
 }

@@ -115,7 +115,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	if cd {
-		return lobbyAt(cfg, mainRoot, name, wsDir)
+		return upAt(cfg, name, wsDir, false)
 	}
 	return nil
 }

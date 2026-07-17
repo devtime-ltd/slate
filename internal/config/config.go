@@ -48,33 +48,52 @@ type ProjectConfig struct {
 	Project  string              `yaml:"project"`
 	Database string              `yaml:"database"`
 	Editor   string              `yaml:"editor"`
-	New      string              `yaml:"new"`
-	Up       string              `yaml:"up"`
+	Fresh    string              `yaml:"fresh"`
+	Setup    string              `yaml:"setup"`
 	Env      map[string]string   `yaml:"env"`
 	AppPort  int                 `yaml:"app_port"`
 	VitePort int                 `yaml:"vite_port"`
 	Tools    map[string]ExecTool `yaml:"tools"`
-	Lobby    string              `yaml:"lobby"`
-	LobbyCmd string              `yaml:"lobby_cmd"`
+	Agent    AgentCmd            `yaml:"agent"`
+	Up       string              `yaml:"up"`
 	Extra    map[string]any      `yaml:",inline"`
 }
 
-// lobbyPresets are named lobby commands selectable via `lobby:`;
-// `lobby_cmd` supplies a custom one.
-var lobbyPresets = map[string]string{
-	"claude": `claude --continue || claude --name "{{HOSTNAME}}"`,
+// AgentCmd is a single command, or a [first-run, thereafter] pair.
+type AgentCmd struct {
+	First string
+	Again string
 }
 
-// LobbyCommand returns the command to run in the workspace on lobby,
-// and whether one is configured (false means plain shell/none).
-func (c ProjectConfig) LobbyCommand() (string, bool) {
-	if c.LobbyCmd != "" {
-		return c.LobbyCmd, true
+func (a *AgentCmd) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var s string
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		a.First, a.Again = s, s
+		return nil
+	case yaml.SequenceNode:
+		var items []string
+		if err := value.Decode(&items); err != nil {
+			return fmt.Errorf("agent: %w", err)
+		}
+		switch len(items) {
+		case 1:
+			a.First, a.Again = items[0], items[0]
+		case 2:
+			a.First, a.Again = items[0], items[1]
+		default:
+			return fmt.Errorf("agent: expected 1 or 2 commands, got %d", len(items))
+		}
+		return nil
 	}
-	if preset, ok := lobbyPresets[c.Lobby]; ok {
-		return preset, true
-	}
-	return "", false
+	return fmt.Errorf("agent: expected a command string or a [first-run, thereafter] list")
+}
+
+func (a AgentCmd) IsZero() bool {
+	return a.First == "" && a.Again == ""
 }
 
 func (c ProjectConfig) StringMap(key string) map[string]string {
@@ -251,30 +270,13 @@ func LoadProject(dir string) (ProjectConfig, error) {
 	if cfg.VitePort == 0 {
 		cfg.VitePort = 5173
 	}
-	switch cfg.Lobby {
-	case "", "shell", "none":
-	default:
-		if _, ok := lobbyPresets[cfg.Lobby]; !ok {
-			return cfg, fmt.Errorf("slate.yml: invalid lobby %q (valid: shell, none, claude; or set lobby_cmd for a custom command)", cfg.Lobby)
-		}
-	}
-	if cfg.LobbyCmd != "" && cfg.Lobby != "" {
-		return cfg, fmt.Errorf("slate.yml: set lobby or lobby_cmd, not both")
-	}
-	// warn, don't reject: old branches carry these keys in committed slate.ymls
-	for _, key := range []string{"agent", "claude_args"} {
-		if _, ok := cfg.Extra[key]; ok && !warnedRemovedKeys[key] {
-			warnedRemovedKeys[key] = true
-			fmt.Fprintf(os.Stderr, "  note: slate.yml `%s` was removed and is ignored; sessions now run on the host via `lobby: claude` or `lobby_cmd`\n", key)
-		}
-	}
 	return cfg, nil
 }
 
-var warnedRemovedKeys = map[string]bool{}
-
 // LoadProjectForWorkspace prefers the worktree's slate.yml so a branch can
-// test config changes; `project:` identity stays pinned to the main checkout.
+// test config changes. `project:` stays pinned to the main checkout, as do
+// the host-executed `agent`/`up`: the worktree is container-writable, so
+// honouring its copy would hand host execution to a rogue dependency.
 func LoadProjectForWorkspace(mainRoot, wsDir string) (ProjectConfig, error) {
 	mainCfg, err := LoadProject(mainRoot)
 	if err != nil {
@@ -291,5 +293,34 @@ func LoadProjectForWorkspace(mainRoot, wsDir string) (ProjectConfig, error) {
 		return wsCfg, fmt.Errorf("workspace slate.yml: %w", err)
 	}
 	wsCfg.Project = mainCfg.Project
+	wsCfg.Agent = mainCfg.Agent
+	wsCfg.Up = mainCfg.Up
 	return wsCfg, nil
+}
+
+// HostExecPinned reports which pinned host-exec fields the workspace's
+// slate.yml tries (inertly) to change.
+func HostExecPinned(mainRoot, wsDir string) []string {
+	if wsDir == "" {
+		return nil
+	}
+	if info, err := os.Stat(filepath.Join(wsDir, "slate.yml")); err != nil || info.IsDir() {
+		return nil
+	}
+	mainCfg, err := LoadProject(mainRoot)
+	if err != nil {
+		return nil
+	}
+	wsCfg, err := LoadProject(wsDir)
+	if err != nil {
+		return nil
+	}
+	var pinned []string
+	if !wsCfg.Agent.IsZero() && wsCfg.Agent != mainCfg.Agent {
+		pinned = append(pinned, "agent")
+	}
+	if wsCfg.Up != "" && wsCfg.Up != mainCfg.Up {
+		pinned = append(pinned, "up")
+	}
+	return pinned
 }

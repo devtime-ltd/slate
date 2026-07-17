@@ -65,7 +65,7 @@ Tools:
   slate cd [name]                 Spawn a sub-shell rooted at the workspace dir
   slate code [name]               Open workspace in your editor
   slate shell [name]              Bash shell in app container
-  slate lobby [name]              Run the lobby command in a workspace (see Lobby)
+  slate agent [name]              Run the agent command in a workspace (see Agent)
   slate exec [-s svc] -- <cmd>    Run an arbitrary command in a container (-i for a TTY)
   slate logs [name] [svc]         Tail logs (default: all services)
   slate proxy                     Manage the HTTPS proxy
@@ -160,7 +160,7 @@ php_ini:
   memory_limit: 1024M
 
 # Override lifecycle hooks (optional)
-up: |
+setup: |
   composer config http-basic.nova.laravel.com "$NOVA_USER" "$NOVA_KEY"
   {{SCAFFOLD_DEFAULT}}
 
@@ -175,9 +175,9 @@ files:
   ~/.npmrc: /home/node/.npmrc
 ```
 
-Lifecycle hooks:
-- **`up`**: runs on every `slate new` and `slate up` (default: install deps + migrate)
-- **`new`**: runs on `slate new` only, after `up` (default: fresh DB seed)
+Lifecycle hooks (run inside the containers):
+- **`setup`**: runs on every `slate new` and `slate up` (default: install deps + migrate)
+- **`fresh`**: runs after `setup` on `slate new` and `slate up --fresh` (default: fresh DB seed)
 - Use `{{SCAFFOLD_DEFAULT}}` to inject the scaffold's defaults at any point in your override
 - A `retry <cmd>` shell helper is available inside hooks (3 attempts, linear backoff); wrap any flaky network step, e.g. `retry composer install`
 
@@ -199,29 +199,29 @@ tools:
 
 User-defined tools in `slate.yml` are always exec tools (run a command in a container).
 
-## Lobby: what `new`/`up` drop you into
+## Agent + up: what `new`/`up` drop you into
 
-When provisioning finishes at an interactive terminal, slate drops you into the workspace (the `auto_cd` behaviour). `lobby` in `slate.yml` picks what runs first, and `slate lobby [name]` runs the same thing on demand from anywhere:
+When provisioning finishes at an interactive terminal, slate drops you into the workspace (the `auto_cd` behaviour): it runs the `up` hook if configured, then a shell. `agent` defines the command `slate agent [name]` runs; point `up` at it to land in your agent after every `new`/`up`:
 
 ```yaml
-lobby: claude    # preset: continue the worktree's latest claude session,
-                   # or start a fresh one named <project>--<workspace>
-# lobby: shell   # default: just a shell in the worktree
-# lobby: none    # never drop into anything
+agent:
+  - claude --name "{{PROJECT}}--{{WORKSPACE}}"   # first run (SLATE_FRESH=1)
+  - claude --continue                            # thereafter
+up: slate agent
 ```
 
-For anything custom, `lobby_cmd` runs an arbitrary command in the worktree (then drops to the shell when it exits). `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` are expanded, and it runs via `sh -c` with `SLATE_WORKSPACE` set:
+`agent` is either a single command or a `[first-run, thereafter]` pair; the first-run variant is picked when `SLATE_FRESH=1`, which slate sets when `up` fires from a freshly provisioned `slate new`. With the pair above, every new workspace starts a claude session named `<project>--<workspace>` (resumable later with `claude --resume <name>`), and re-entry continues where you left off.
+
+Both commands run in the worktree via `sh -c` with `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` expanded and `SLATE_WORKSPACE`, `SLATE_PROJECT`, `SLATE_FRESH` in the environment. `slate agent` with no `agent:` configured is an error. `up` can be anything:
 
 ```yaml
 # a session that survives your terminal app and allows multiple attachments
-lobby_cmd: tmux new-session -A -s {{HOSTNAME}} 'claude --continue || claude --name "{{HOSTNAME}}"'
+up: tmux new-session -A -s {{HOSTNAME}} 'slate agent'
 ```
 
-With that recipe, `slate lobby` from any terminal re-attaches to the workspace's running session (`tmux new -A` is attach-or-create), killing your terminal doesn't kill the session, and detaching after `new`/`up` leaves you in the workspace shell.
+(`tmux new -A` re-attaches an existing server session, which keeps its original environment, so `SLATE_FRESH` only reaches `slate agent` on the session that created the server.)
 
-Because `lobby_cmd` executes on your host from a repo-tracked file, it needs one-time approval per project: slate shows the exact command and asks before the first run (and again whenever the command changes), remembering consent outside the repo. Presets are slate-shipped and exempt. Non-interactive runs never prompt: an unapproved command is skipped with a warning.
-
-The lobby runs on your **host**: your normal claude login, skills, MCPs, and git access all apply. The blast-radius protection stays where it always was, in the containers that run the app and its dependency installs.
+These commands execute on your **host**: your normal claude login, skills, MCPs, and git access all apply. Because of that, `agent` and `up` are always read from the **main checkout's** `slate.yml` and never from the workspace copy: the worktree is writable by container code, so a compromised dependency could otherwise edit `slate.yml` and wait for your next slate command. Workspace-side edits to these fields are inert and get a note saying so; land them in the main checkout to take effect. The blast-radius protection stays where it always was, in the containers that run the app and its dependency installs.
 
 ### Slate for agents
 
