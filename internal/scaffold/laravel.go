@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/devtime-ltd/slate/internal/config"
-	"github.com/devtime-ltd/slate/templates"
+	"github.com/devtime-ltd/slate/scaffolds"
 )
 
 // laravelDefaultPHPIni is baked into every laravel workspace as
@@ -34,7 +34,7 @@ func init() {
 
 func (s *laravelScaffold) Name() string { return "laravel" }
 
-func (s *laravelScaffold) FS() embed.FS { return templates.Laravel }
+func (s *laravelScaffold) FS() embed.FS { return scaffolds.Laravel }
 
 func (s *laravelScaffold) FileMap(slateDir string) map[string]string {
 	return map[string]string{

@@ -8,7 +8,7 @@ Slate is a CLI tool for creating isolated, ephemeral dev workspaces using Docker
 
 **Primary motivation:** blast-radius reduction against supply-chain attacks. All package installs (composer, npm, pip, bundle) and code execution run inside containers with no access to the host's `~/.ssh`, cloud credentials, browser password stores, etc.
 
-**Stack:** Go (cobra for CLI, `embed` for templates, lipgloss for table output), Docker Compose for orchestration, Caddy (containerised) for HTTPS proxy.
+**Stack:** Go (cobra for CLI, `embed` for scaffolds, lipgloss for table output), Docker Compose for orchestration, Caddy (containerised) for HTTPS proxy.
 
 **Repo:** `github.com/devtime-ltd/slate`
 
@@ -23,11 +23,11 @@ slate (Go binary)
 │   ├── compose/      Docker Compose orchestration wrapper
 │   ├── proxy/        Caddy container proxy + route registration
 │   └── scaffold/     Scaffold interface + per-scaffold implementations
-├── templates/        go:embed templates per scaffold (laravel, nextjs)
+├── scaffolds/        go:embed'd scaffolds (laravel, nextjs)
 └── main.go
 ```
 
-**Per-project bootstrap:** just `slate.yml` (created by `slate init <scaffold>`). Docker infrastructure (compose.yaml, Dockerfile, .dockerignore) is generated at runtime into `.slate/` (gitignored) from embedded templates.
+**Per-project bootstrap:** just `slate.yml` (created by `slate init <scaffold>`). Docker infrastructure (compose.yaml, Dockerfile, .dockerignore) is generated at runtime into `.slate/` (gitignored) from the embedded scaffold.
 
 **Key internal conventions:**
 - Compose project: `slate__{project}--{workspace}` (double underscore)
@@ -181,7 +181,7 @@ Suggested order:
 - Go standard project layout. `internal/` for non-exported packages.
 - cobra for CLI commands. Each command in its own file under `cmd/`.
 - Errors returned, not panicked. User-facing errors should be clear and actionable.
-- Templates use `go:embed`. New scaffolds add a directory under `templates/` and an embed var in `templates/embed.go`.
+- Scaffolds are embedded via `go:embed`. New scaffolds add a directory under `scaffolds/` and an embed var in `scaffolds/embed.go`.
 - Unit tests for pure functions (config, scaffold, workspace). CI runs `go test + go vet + go build`.
 - Commit messages follow Conventional Commits (feat/fix/refactor/docs/chore).
 - Do not duplicate the README. If user-facing content needs updating, edit `README.md` and link from here.
