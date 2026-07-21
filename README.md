@@ -6,7 +6,7 @@ Your code stays on the host, everything else runs in Docker containers. Each wor
 
 ## Installation
 
-Slate is a single Go binary. Building it requires [Go 1.26+](https://go.dev/dl/); the scaffold templates are embedded at compile time, so there are no other build-time dependencies.
+Slate is a single Go binary. Building it requires [Go 1.26+](https://go.dev/dl/); the scaffolds are embedded at compile time, so there are no other build-time dependencies.
 
 To **run** slate you also need Docker ([OrbStack](https://orbstack.dev) on macOS, recommended, or Docker Engine on Linux) and Git. See [Requirements](#requirements) for details.
 

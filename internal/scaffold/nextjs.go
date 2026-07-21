@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/devtime-ltd/slate/internal/config"
-	"github.com/devtime-ltd/slate/templates"
+	"github.com/devtime-ltd/slate/scaffolds"
 )
 
 type nextjsScaffold struct{}
@@ -16,7 +16,7 @@ func init() {
 
 func (s *nextjsScaffold) Name() string { return "nextjs" }
 
-func (s *nextjsScaffold) FS() embed.FS { return templates.NextJS }
+func (s *nextjsScaffold) FS() embed.FS { return scaffolds.NextJS }
 
 func (s *nextjsScaffold) FileMap(slateDir string) map[string]string {
 	return map[string]string{
