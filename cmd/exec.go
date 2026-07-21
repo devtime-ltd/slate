@@ -160,12 +160,10 @@ func registerToolCommands() {
 		return
 	}
 
-	s, err := scaffold.Get(cfg.Scaffold)
-	if err != nil {
-		return
+	var tools map[string]config.Tool
+	if s, err := scaffold.Resolve(cfg); err == nil {
+		tools = s.Tools()
 	}
-
-	tools := s.Tools()
 	if userTools := cfg.ResolvedTools(); userTools != nil {
 		tools = userTools
 	}

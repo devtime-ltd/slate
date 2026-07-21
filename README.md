@@ -139,9 +139,15 @@ A single `slate.yml` in your project root:
 scaffold: laravel
 ```
 
-That's it for most projects. The scaffold provides sensible defaults for the Docker image, services, lifecycle scripts, and available tool commands.
+That's it for most projects. The scaffold provides sensible defaults for the Docker image, services, lifecycle scripts, and available tool commands. When no built-in scaffold fits, a project can define one inline instead; see [Inline scaffolds](#inline-scaffolds).
 
-Each workspace uses the `slate.yml` in its **own worktree** when present, so a branch can change config (packages, hooks, tools, agent) and test it with `slate up` before merging; slate prints a note whenever a workspace's config differs from the main checkout's. The one exception is `project:`, which is always taken from the main checkout so a branch can't change the workspace's identity (hostname, compose project, database names). Heavier changes like swapping `scaffold:` usually want `slate up --fresh`.
+Each workspace uses the `slate.yml` in its **own worktree** when present, so a branch can change config (packages, hooks, tools) and test it with `slate up` before merging; slate prints a note whenever a workspace's config differs from the main checkout's. Exceptions:
+
+- `project:` is always taken from the main checkout so a branch can't change the workspace's identity (hostname, compose project, database names).
+- `agent:` and `up:` run on the host and only ever come from the main checkout (see [Agent](#agent--up-what-newup-drop-you-into)).
+- `scaffold:`, `files:`, `database:`, and `env:` (the latter two interpolate into compose files) can reach host resources, so they come from **committed content on the workspace branch** (containers can't commit; the `.git` mount is read-only) or, when the branch doesn't commit a `slate.yml`, from the main checkout. Uncommitted worktree edits to them are inert and get a note; commit them on the branch to test. This keeps a rewritten worktree config (e.g. by a compromised dependency) from mounting host files into containers on your next `slate up`.
+
+Heavier changes like swapping `scaffold:` usually want `slate up --fresh`.
 
 ### Customisation
 
@@ -237,7 +243,37 @@ Slate is designed to be driven by an LLM running on the host:
 |----------|-------|----------|
 | `laravel` | PHP 8.3 + Apache, MySQL, Vite, Mailpit | app, queue, mysql, vite, mailpit |
 | `nextjs` | Node 22, PostgreSQL, Mailpit | app, postgres, mailpit |
-| `none` | Bring your own compose.yaml | User-defined |
+| [inline](#inline-scaffolds) | Bring your own compose file | User-defined |
+
+### Inline scaffolds
+
+When no built-in scaffold fits, define one inline by giving `scaffold:` a map instead of a name:
+
+```yaml
+scaffold:
+  compose: ./slate/compose.yaml
+  subdomains:
+    "@":    { service: app, port: 8081 }     # the main <project>--<ws>.test (DNS-style apex)
+    warden: { service: warden, port: 8080 }  # warden.<project>--<ws>.test
+```
+
+- **`compose`** is a committed, project-relative compose file, copied into each workspace's `.slate/compose.yaml`. Its content comes from the workspace branch's committed copy, or the main checkout when the branch doesn't commit one, never from the worktree's working files (a compose file defines mounts, so it's host-reaching config; see [Project Config](#project-config)). Follow the conventions the built-in scaffolds use: bind-mount the worktree as `..:/app`, publish container ports without host numbers (`ports: ["8081"]`) so Docker assigns free ones, and optionally mount `${SLATE_ENTRYPOINT}` as the entrypoint for slate's UID mapping. `${MAIN_ROOT}`, `${APP_UID}`, and `${APP_GID}` interpolate as usual. The Dockerfile is committed too and referenced directly (`build: {context: .., dockerfile: slate/Dockerfile}`).
+- **`subdomains`** declares the HTTPS routes: which service and container port each hostname proxies to. `"@"` is the apex, i.e. the main workspace hostname (quoted, since YAML reserves a bare `@`).
+- Everything else stays in the ordinary keys: `setup:` / `fresh:` (inline scaffolds have no defaults), `tools:`, `env:`, `files:`.
+- Services that bind-mount `/app` get the built-ins' app-like treatment: `app` is the primary (runs the lifecycle, default target for `slate exec`), the rest are restarted after each setup run since they don't hot-reload.
+
+Name the compose file with a `.tmpl` extension to run it through Go's text/template on the way in, with `vars:` as free-form input:
+
+```yaml
+scaffold:
+  compose: ./slate/compose.yaml.tmpl
+  vars:
+    with_warden: true
+```
+
+Template data: `.Project`, `.Workspace`, `.Hostname`, `.HasMainEnv`, `.Database`, and `.Vars`. Most per-workspace variance doesn't need this; compose `${...}` interpolation and `env:` placeholders (`{{DB_NAME:label}}`, `{{GEN_PASSWORD:salt}}`, which share the `{{...}}` syntax and belong in `env:` values, not `.tmpl` files) already cover values. Reach for a template only for structural differences, like conditionally including a service.
+
+`slate init inline` writes a starter slate.yml. The legacy `scaffold: none` still parses and behaves as an inline scaffold with no compose file.
 
 ### Vite over HTTPS (Laravel)
 

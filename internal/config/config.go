@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 
+	"github.com/devtime-ltd/slate/internal/workspace"
 	"gopkg.in/yaml.v3"
 )
 
@@ -44,7 +46,7 @@ type DBTool struct {
 func (DBTool) isTool() {}
 
 type ProjectConfig struct {
-	Scaffold string              `yaml:"scaffold"`
+	Scaffold ScaffoldRef         `yaml:"scaffold"`
 	Project  string              `yaml:"project"`
 	Database string              `yaml:"database"`
 	Editor   string              `yaml:"editor"`
@@ -58,6 +60,69 @@ type ProjectConfig struct {
 	Up       string              `yaml:"up"`
 	Extra    map[string]any      `yaml:",inline"`
 }
+
+// ScaffoldRef is a built-in scaffold name, or an inline scaffold when
+// `scaffold:` is a map.
+type ScaffoldRef struct {
+	Name   string
+	Inline *InlineScaffold
+}
+
+// InlineScaffold: a project-committed compose file (project-relative path;
+// .tmpl extension opts into template rendering) plus the proxy routes it
+// serves. Tools, lifecycle, env, and files stay top-level slate.yml keys.
+type InlineScaffold struct {
+	Compose    string                 `yaml:"compose"`
+	Subdomains map[string]ServicePort `yaml:"subdomains"`
+	Vars       map[string]any         `yaml:"vars"`
+}
+
+type ServicePort struct {
+	Service string `yaml:"service"`
+	Port    int    `yaml:"port"`
+}
+
+func (s *ScaffoldRef) UnmarshalYAML(value *yaml.Node) error {
+	*s = ScaffoldRef{}
+	switch value.Kind {
+	case yaml.ScalarNode:
+		return value.Decode(&s.Name)
+	case yaml.MappingNode:
+		var def InlineScaffold
+		if err := value.Decode(&def); err != nil {
+			return fmt.Errorf("scaffold: %w", err)
+		}
+		if def.Compose != "" && !filepath.IsLocal(filepath.Clean(def.Compose)) {
+			return fmt.Errorf("scaffold: compose path %q must be relative and stay inside the project", def.Compose)
+		}
+		// "@" is the apex spelling (DNS-style); "" is the internal form the
+		// proxy layer uses and isn't accepted in config.
+		if _, ok := def.Subdomains[""]; ok {
+			return fmt.Errorf(`scaffold: subdomains key "" is not allowed; use "@" for the main hostname`)
+		}
+		if apex, ok := def.Subdomains["@"]; ok {
+			delete(def.Subdomains, "@")
+			def.Subdomains[""] = apex
+		}
+		for prefix, sp := range def.Subdomains {
+			label := prefix
+			if label == "" {
+				label = "@"
+			}
+			if sp.Service == "" {
+				return fmt.Errorf("scaffold: subdomain %q needs a service", label)
+			}
+			if sp.Port < 1 || sp.Port > 65535 {
+				return fmt.Errorf("scaffold: subdomain %q needs a port between 1 and 65535, got %d", label, sp.Port)
+			}
+		}
+		s.Inline = &def
+		return nil
+	}
+	return fmt.Errorf("scaffold: expected a scaffold name or an inline scaffold map")
+}
+
+func (s ScaffoldRef) IsZero() bool { return s.Name == "" && s.Inline == nil }
 
 // AgentCmd is a single command, or a [first-run, thereafter] pair.
 type AgentCmd struct {
@@ -285,17 +350,93 @@ func LoadProjectForWorkspace(mainRoot, wsDir string) (ProjectConfig, error) {
 	if wsDir == "" {
 		return mainCfg, nil
 	}
+
+	cfg := mainCfg
+	if info, err := os.Stat(filepath.Join(wsDir, "slate.yml")); err == nil && !info.IsDir() {
+		wsCfg, err := LoadProject(wsDir)
+		if err != nil {
+			return wsCfg, fmt.Errorf("workspace slate.yml: %w", err)
+		}
+		wsCfg.Project = mainCfg.Project
+		wsCfg.Agent = mainCfg.Agent
+		wsCfg.Up = mainCfg.Up
+		cfg = wsCfg
+	}
+
+	// Host-reaching config never comes from the container-writable worktree
+	// (see trustedConfig): scaffold and files directly, database and env
+	// because they interpolate into compose files (env via the --env-file
+	// that .env.container is passed as). Applied even when the worktree's
+	// slate.yml is missing: container code can delete the file, and that must
+	// not flip the trusted resolution away from the branch's committed config.
+	trusted := trustedConfig(mainRoot, wsDir, mainCfg)
+	trustedFiles, hasFiles := trusted.Extra["files"]
+	cfg.Scaffold = trusted.Scaffold
+	cfg.Database = trusted.Database
+	cfg.Env = trusted.Env
+	if cfg.Extra != nil {
+		delete(cfg.Extra, "files")
+	}
+	if hasFiles {
+		if cfg.Extra == nil {
+			cfg.Extra = map[string]any{}
+		}
+		cfg.Extra["files"] = trustedFiles
+	}
+	return cfg, nil
+}
+
+// trustedConfig resolves the config whose keys can reach host resources
+// (mount host files, define containers). Containers cannot commit (the main
+// .git is mounted read-only), so committed content on the workspace branch is
+// host-authored; failing that, the main checkout's slate.yml applies. The
+// worktree's own working copy is never trusted for these keys: container code
+// can rewrite it.
+func trustedConfig(mainRoot, wsDir string, mainCfg ProjectConfig) ProjectConfig {
+	data, ok := workspace.CommittedFile(mainRoot, wsDir, "slate.yml")
+	if !ok {
+		return mainCfg
+	}
+	var committed ProjectConfig
+	if err := yaml.Unmarshal(data, &committed); err != nil {
+		return mainCfg
+	}
+	return committed
+}
+
+// TrustPinned reports which host-reaching keys the workspace's working-tree
+// slate.yml tries (inertly) to change relative to the trusted resolution.
+func TrustPinned(mainRoot, wsDir string) []string {
+	if wsDir == "" {
+		return nil
+	}
 	if info, err := os.Stat(filepath.Join(wsDir, "slate.yml")); err != nil || info.IsDir() {
-		return mainCfg, nil
+		return nil
+	}
+	mainCfg, err := LoadProject(mainRoot)
+	if err != nil {
+		return nil
 	}
 	wsCfg, err := LoadProject(wsDir)
 	if err != nil {
-		return wsCfg, fmt.Errorf("workspace slate.yml: %w", err)
+		return nil
 	}
-	wsCfg.Project = mainCfg.Project
-	wsCfg.Agent = mainCfg.Agent
-	wsCfg.Up = mainCfg.Up
-	return wsCfg, nil
+	trusted := trustedConfig(mainRoot, wsDir, mainCfg)
+
+	var pinned []string
+	if !reflect.DeepEqual(wsCfg.Scaffold, trusted.Scaffold) {
+		pinned = append(pinned, "scaffold")
+	}
+	if wsCfg.Database != trusted.Database {
+		pinned = append(pinned, "database")
+	}
+	if !reflect.DeepEqual(wsCfg.Env, trusted.Env) {
+		pinned = append(pinned, "env")
+	}
+	if !reflect.DeepEqual(wsCfg.Extra["files"], trusted.Extra["files"]) {
+		pinned = append(pinned, "files")
+	}
+	return pinned
 }
 
 // HostExecPinned reports which pinned host-exec fields the workspace's

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -77,8 +78,8 @@ func TestLoadProjectMissingFile(t *testing.T) {
 	if cfg.AppPort != 8080 {
 		t.Errorf("AppPort = %d, want default 8080", cfg.AppPort)
 	}
-	if cfg.Scaffold != "" {
-		t.Errorf("Scaffold = %q, want empty", cfg.Scaffold)
+	if cfg.Scaffold.Name != "" {
+		t.Errorf("Scaffold = %q, want empty", cfg.Scaffold.Name)
 	}
 }
 
@@ -90,8 +91,189 @@ func TestLoadProjectWithScaffold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Scaffold != "laravel" {
-		t.Errorf("Scaffold = %q, want %q", cfg.Scaffold, "laravel")
+	if cfg.Scaffold.Name != "laravel" {
+		t.Errorf("Scaffold = %q, want %q", cfg.Scaffold.Name, "laravel")
+	}
+}
+
+func TestLoadProjectInlineScaffold(t *testing.T) {
+	dir := t.TempDir()
+	yaml := `scaffold:
+  compose: ./slate/compose.yaml.tmpl
+  subdomains:
+    "@": { service: app, port: 8081 }
+    warden: { service: warden, port: 8080 }
+  vars:
+    with_warden: true
+`
+	if err := os.WriteFile(filepath.Join(dir, "slate.yml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadProject(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := cfg.Scaffold.Inline
+	if def == nil {
+		t.Fatal("Scaffold.Inline should be set for a map scaffold")
+	}
+	if cfg.Scaffold.Name != "" {
+		t.Errorf("Name = %q, want empty for inline scaffold", cfg.Scaffold.Name)
+	}
+	if def.Compose != "./slate/compose.yaml.tmpl" {
+		t.Errorf("Compose = %q", def.Compose)
+	}
+	if sp := def.Subdomains[""]; sp.Service != "app" || sp.Port != 8081 {
+		t.Errorf(`"@" should normalise to the internal "" apex, got %+v`, sp)
+	}
+	if _, ok := def.Subdomains["@"]; ok {
+		t.Error(`"@" key should not survive normalisation`)
+	}
+	if sp := def.Subdomains["warden"]; sp.Service != "warden" || sp.Port != 8080 {
+		t.Errorf("warden subdomain = %+v", sp)
+	}
+	if v, ok := def.Vars["with_warden"].(bool); !ok || !v {
+		t.Errorf("Vars[with_warden] = %v", def.Vars["with_warden"])
+	}
+}
+
+func TestLoadProjectInlineScaffoldRejectsEscapingComposePath(t *testing.T) {
+	for _, path := range []string{"../outside/compose.yaml", "/etc/compose.yaml", "a/../../b.yaml"} {
+		dir := t.TempDir()
+		yaml := "scaffold:\n  compose: " + path + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "slate.yml"), []byte(yaml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := LoadProject(dir); err == nil || !strings.Contains(err.Error(), "stay inside") {
+			t.Errorf("compose path %q should be rejected, got err=%v", path, err)
+		}
+	}
+}
+
+func TestLoadProjectInlineScaffoldRejectsEmptySubdomainKey(t *testing.T) {
+	dir := t.TempDir()
+	yaml := `scaffold:
+  subdomains:
+    "": { service: app, port: 8080 }
+`
+	if err := os.WriteFile(filepath.Join(dir, "slate.yml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadProject(dir); err == nil || !strings.Contains(err.Error(), `use "@"`) {
+		t.Errorf(`a "" subdomain key should be rejected in favour of "@", got %v`, err)
+	}
+}
+
+func TestLoadProjectForWorkspaceTrustsMainForScaffoldAndFiles(t *testing.T) {
+	mainRoot, wsDir := t.TempDir(), t.TempDir() // no git: main checkout is the trusted source
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: nextjs\n"), 0o644)
+	wsYaml := `scaffold: laravel
+setup: |
+  echo from-workspace
+files:
+  ~/.npmrc: /home/node/.npmrc
+`
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte(wsYaml), 0o644)
+
+	cfg, err := LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Scaffold.Name != "nextjs" {
+		t.Errorf("Scaffold = %q, want trusted main checkout's nextjs", cfg.Scaffold.Name)
+	}
+	if files := cfg.StringMap("files"); files != nil {
+		t.Errorf("files should come from the trusted source (main has none), got %v", files)
+	}
+	if !strings.Contains(cfg.Setup, "from-workspace") {
+		t.Errorf("benign keys should still come from the workspace, got %q", cfg.Setup)
+	}
+}
+
+func TestLoadProjectForWorkspaceBranchCommitSurvivesWorktreeDeletion(t *testing.T) {
+	mainRoot := t.TempDir()
+	gitRunCfg(t, mainRoot, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: nextjs\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRunCfg(t, mainRoot, "add", ".")
+	gitRunCfg(t, mainRoot, "commit", "-q", "-m", "init")
+
+	wsDir := filepath.Join(mainRoot, ".slate", "workspaces", "feat")
+	gitRunCfg(t, mainRoot, "worktree", "add", "-q", "-b", "slate/feat", wsDir)
+	if err := os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRunCfg(t, wsDir, "add", "slate.yml")
+	gitRunCfg(t, wsDir, "commit", "-q", "-m", "branch scaffold")
+
+	// container code deleting the working copy must not flip the trusted
+	// resolution away from the branch's committed config
+	if err := os.Remove(filepath.Join(wsDir, "slate.yml")); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Scaffold.Name != "laravel" {
+		t.Errorf("Scaffold = %q, want branch-committed laravel", cfg.Scaffold.Name)
+	}
+}
+
+func gitRunCfg(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "user.email=test@test", "-c", "user.name=test", "-c", "commit.gpgsign=false"}, args...)...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func TestTrustPinnedReportsInertChanges(t *testing.T) {
+	mainRoot, wsDir := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: nextjs\n"), 0o644)
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nfiles:\n  ~/.npmrc: /x\n"), 0o644)
+
+	pinned := TrustPinned(mainRoot, wsDir)
+	if !slices.Equal(pinned, []string{"scaffold", "files"}) {
+		t.Errorf("TrustPinned = %v, want [scaffold files]", pinned)
+	}
+
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: nextjs\n"), 0o644)
+	if pinned := TrustPinned(mainRoot, wsDir); pinned != nil {
+		t.Errorf("matching config should report nothing, got %v", pinned)
+	}
+}
+
+func TestLoadProjectInlineScaffoldRejectsInvalidSubdomainEntries(t *testing.T) {
+	for _, entry := range []string{
+		`"@": { port: 8080 }`,
+		`"@": { service: app }`,
+		`"@": { service: app, port: 70000 }`,
+	} {
+		dir := t.TempDir()
+		yaml := "scaffold:\n  subdomains:\n    " + entry + "\n"
+		os.WriteFile(filepath.Join(dir, "slate.yml"), []byte(yaml), 0o644)
+
+		if _, err := LoadProject(dir); err == nil || !strings.Contains(err.Error(), "subdomain") {
+			t.Errorf("entry %q should be rejected, got err=%v", entry, err)
+		}
+	}
+}
+
+func TestLoadProjectScaffoldRejectsSequence(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("scaffold: [laravel]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadProject(dir); err == nil || !strings.Contains(err.Error(), "scaffold") {
+		t.Errorf("sequence scaffold should be rejected, got err=%v", err)
 	}
 }
 
@@ -173,7 +355,7 @@ setup: |
 
 func TestResolvedToolsOverride(t *testing.T) {
 	cfg := ProjectConfig{
-		Scaffold: "laravel",
+		Scaffold: ScaffoldRef{Name: "laravel"},
 		Tools: map[string]ExecTool{
 			"mycommand": {Service: "app", Command: []string{"php", "script.php"}},
 		},
@@ -185,7 +367,7 @@ func TestResolvedToolsOverride(t *testing.T) {
 }
 
 func TestResolvedToolsEmpty(t *testing.T) {
-	cfg := ProjectConfig{Scaffold: "laravel"}
+	cfg := ProjectConfig{Scaffold: ScaffoldRef{Name: "laravel"}}
 	tools := cfg.ResolvedTools()
 	if tools != nil {
 		t.Errorf("ResolvedTools without override should return nil, got %v", tools)

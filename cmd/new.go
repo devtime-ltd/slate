@@ -120,16 +120,21 @@ func createWorkspace(name, branch string, bg, cd, adopt bool) error {
 	}
 
 	fmt.Println("Generating .slate/ and .env.container...")
-	if err := scaffold.Generate(wsDir, mainRoot, cfg); err != nil {
+	id := scaffold.Identity{Project: projectName, Workspace: name, Hostname: hostname}
+	if err := scaffold.Generate(wsDir, mainRoot, cfg, id); err != nil {
 		return fmt.Errorf("generating scaffold: %w", err)
-	}
-	if s, err := scaffold.Get(cfg.Scaffold); err == nil {
-		if err := scaffold.GenerateFileMounts(wsDir, cfg, s); err != nil {
-			return fmt.Errorf("generating file mounts: %w", err)
-		}
 	}
 	if err := scaffold.GenerateEnvContainer(wsDir, mainRoot, hostname, projectName, name, cfg, proxyConfig); err != nil {
 		return fmt.Errorf("generating .env.container: %w", err)
+	}
+	env, err := compose.NewEnv(name, wsDir, hostname)
+	if err != nil {
+		return err
+	}
+	if s, err := scaffold.Resolve(cfg); err == nil {
+		if err := scaffold.GenerateFileMounts(wsDir, cfg, s, appLikeServices(env, cfg)); err != nil {
+			return fmt.Errorf("generating file mounts: %w", err)
+		}
 	}
 	if err := scaffold.EnsureGitignore(mainRoot); err != nil {
 		fmt.Printf("  warning: could not update .gitignore: %v\n", err)
@@ -141,10 +146,6 @@ func createWorkspace(name, branch string, bg, cd, adopt bool) error {
 		return runBackgroundProvision(cfg, name, wsDir, opts, cd)
 	}
 
-	env, err := compose.NewEnv(name, wsDir, hostname)
-	if err != nil {
-		return err
-	}
 	if err := runWorkspaceLifecycle(env, name, wsDir, hostname, cfg, proxyConfig, opts); err != nil {
 		return fmt.Errorf("%w\n\nThe worktree is intact — resume provisioning with:\n  slate up %s", err, name)
 	}

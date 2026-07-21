@@ -70,11 +70,16 @@ func runRestart(cmd *cobra.Command, args []string) error {
 	}
 
 	mainRoot, _ := workspace.MainRoot()
-	cfg, _ := config.LoadProject(mainRoot)
-
-	services := buildServicePorts(env, cfg)
-	if err := proxy.Register(hostname, services); err != nil {
-		fmt.Printf("  warning: proxy re-registration failed: %v\n", err)
+	cfg, err := config.LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		// Registering with a defaulted config would clear the workspace's
+		// routes; keep the existing ones instead.
+		fmt.Printf("  warning: not re-registering proxy routes: %v\n", err)
+	} else {
+		services := buildServicePorts(env, cfg)
+		if err := proxy.Register(hostname, services); err != nil {
+			fmt.Printf("  warning: proxy re-registration failed: %v\n", err)
+		}
 	}
 
 	proxyConfig, _ := loadProxyConfig(false)

@@ -27,7 +27,7 @@ slate (Go binary)
 └── main.go
 ```
 
-**Per-project bootstrap:** just `slate.yml` (created by `slate init <scaffold>`). Docker infrastructure (compose.yaml, Dockerfile, .dockerignore) is generated at runtime into `.slate/` (gitignored) from the embedded scaffold.
+**Per-project bootstrap:** just `slate.yml` (created by `slate init <scaffold>`). Docker infrastructure (compose.yaml, Dockerfile, .dockerignore) is generated at runtime into `.slate/` (gitignored) from the embedded scaffold, or from the project's committed compose file when `scaffold:` is an inline map (see README).
 
 **Key internal conventions:**
 - Compose project: `slate__{project}--{workspace}` (double underscore)
@@ -77,11 +77,20 @@ fields are pinned to the MAIN checkout's slate.yml: the worktree copy is
 container-writable and must never drive host execution. Workspace-side edits
 to them are inert and surface a note (`config.HostExecPinned`).
 
+Related trust rule: `scaffold:`, `files:`, `database:`, and `env:`
+(host-reaching config: they can mount host files, define containers, or
+interpolate into compose files, env via the `--env-file` role of
+.env.container) resolve from the workspace branch's
+committed slate.yml via the main .git (`workspace.CommittedFile`; containers
+can't commit because the .git mount is read-only), falling back to the main
+checkout. The worktree's working copy is never trusted for them
+(`config.trustedConfig` / `config.TrustPinned`).
+
 ## Scaffold interface checklist
 
-When adding a new scaffold, implement every method on `internal/scaffold.Scaffold`. The non-obvious one:
+When adding a new scaffold, implement every method on `internal/scaffold.Scaffold` plus the generation half (`FS`/`FileMap`/`RenderDockerfile`, the unexported `embeddedScaffold` interface). The non-obvious one:
 
-- **`AppLikeServices() []string`** lists compose services that share the `/app` bind (the workspace dir bind-mounted into the container). First entry is the primary; `GenerateFileMounts` puts `/app/*` file mount targets on it alone and shared (non-`/app`) mounts on every listed service. Laravel returns `["app", "queue"]`, nextjs returns `["app"]`. Returning an empty slice while file mounts are configured is treated as a scaffold bug and errors out.
+- **`AppLikeServices() []string`** lists compose services that share the `/app` bind (the workspace dir bind-mounted into the container). First entry is the primary; `GenerateFileMounts` puts `/app/*` file mount targets on it alone and shared (non-`/app`) mounts on every listed service. Laravel returns `["app", "queue"]`, nextjs returns `["app"]`. nil is reserved for inline scaffolds and means "derive from the rendered compose file" (`compose.AppLikeServices`); built-ins must return a non-empty list.
 
 ## File mount handling
 
@@ -181,7 +190,7 @@ Suggested order:
 - Go standard project layout. `internal/` for non-exported packages.
 - cobra for CLI commands. Each command in its own file under `cmd/`.
 - Errors returned, not panicked. User-facing errors should be clear and actionable.
-- Scaffolds are embedded via `go:embed`. New scaffolds add a directory under `scaffolds/` and an embed var in `scaffolds/embed.go`.
+- Scaffolds are embedded via `go:embed`. New scaffolds add a directory under `scaffolds/` and an embed var in `scaffolds/embed.go`. Inline scaffolds (`scaffold:` as a map in slate.yml) resolve through `scaffold.Resolve`, never the registry.
 - Unit tests for pure functions (config, scaffold, workspace). CI runs `go test + go vet + go build`.
 - Commit messages follow Conventional Commits (feat/fix/refactor/docs/chore).
 - Do not duplicate the README. If user-facing content needs updating, edit `README.md` and link from here.
