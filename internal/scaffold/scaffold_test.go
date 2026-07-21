@@ -12,7 +12,7 @@ import (
 )
 
 func TestBuildLifecycleScriptUpOnly(t *testing.T) {
-	cfg := config.ProjectConfig{Scaffold: "laravel"}
+	cfg := config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "laravel"}}
 	script := BuildLifecycleScript(cfg, false)
 
 	if script == "" {
@@ -27,7 +27,7 @@ func TestBuildLifecycleScriptUpOnly(t *testing.T) {
 }
 
 func TestBuildLifecycleScriptRetry(t *testing.T) {
-	cfg := config.ProjectConfig{Scaffold: "laravel"}
+	cfg := config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "laravel"}}
 	script := BuildLifecycleScript(cfg, false)
 
 	if !strings.Contains(script, "retry() {") {
@@ -39,7 +39,7 @@ func TestBuildLifecycleScriptRetry(t *testing.T) {
 }
 
 func TestBuildLifecycleScriptNewThenUp(t *testing.T) {
-	cfg := config.ProjectConfig{Scaffold: "laravel"}
+	cfg := config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "laravel"}}
 	script := BuildLifecycleScript(cfg, true)
 
 	if script == "" {
@@ -62,7 +62,7 @@ func TestBuildLifecycleScriptNewThenUp(t *testing.T) {
 
 func TestBuildLifecycleScriptScaffoldPlaceholder(t *testing.T) {
 	cfg := config.ProjectConfig{
-		Scaffold: "laravel",
+		Scaffold: config.ScaffoldRef{Name: "laravel"},
 		Setup:    "echo before\n{{SCAFFOLD_DEFAULT}}\necho after\n",
 	}
 	script := BuildLifecycleScript(cfg, false)
@@ -80,7 +80,7 @@ func TestBuildLifecycleScriptScaffoldPlaceholder(t *testing.T) {
 
 func TestBuildLifecycleScriptFullOverride(t *testing.T) {
 	cfg := config.ProjectConfig{
-		Scaffold: "laravel",
+		Scaffold: config.ScaffoldRef{Name: "laravel"},
 		Setup:    "custom-command\n",
 	}
 	script := BuildLifecycleScript(cfg, false)
@@ -103,7 +103,7 @@ func TestBuildLifecycleScriptNoScaffold(t *testing.T) {
 }
 
 func TestBuildLifecycleScriptNoneScaffold(t *testing.T) {
-	cfg := config.ProjectConfig{Scaffold: "none"}
+	cfg := config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "none"}}
 	script := BuildLifecycleScript(cfg, false)
 
 	if script != "" {
@@ -274,7 +274,7 @@ func TestLaravelDockerfileBakesPHPDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get(laravel) failed: %v", err)
 	}
-	out, err := s.RenderDockerfile("WORKDIR /app\nUSER www-data\n", config.ProjectConfig{Scaffold: "laravel"})
+	out, err := s.(embeddedScaffold).RenderDockerfile("WORKDIR /app\nUSER www-data\n", config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "laravel"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestLaravelDockerfilePHPIniOverride(t *testing.T) {
 		t.Fatalf("Get(laravel) failed: %v", err)
 	}
 	cfg := config.ProjectConfig{
-		Scaffold: "laravel",
+		Scaffold: config.ScaffoldRef{Name: "laravel"},
 		Extra: map[string]any{
 			"php_ini": map[string]any{
 				"memory_limit":       "2G",
@@ -300,7 +300,7 @@ func TestLaravelDockerfilePHPIniOverride(t *testing.T) {
 			},
 		},
 	}
-	out, err := s.RenderDockerfile("WORKDIR /app\nUSER www-data\n", cfg)
+	out, err := s.(embeddedScaffold).RenderDockerfile("WORKDIR /app\nUSER www-data\n", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestLaravelDockerfileDoesNotImposeMaxExecutionTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get(laravel) failed: %v", err)
 	}
-	out, err := s.RenderDockerfile("WORKDIR /app\n", config.ProjectConfig{Scaffold: "laravel"})
+	out, err := s.(embeddedScaffold).RenderDockerfile("WORKDIR /app\n", config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "laravel"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +346,7 @@ func TestGenerateFileMountsAppTargetOnlyOnAppService(t *testing.T) {
 	cfg := config.ProjectConfig{Extra: map[string]any{
 		"files": map[string]any{src: "/app/.slate/composer/auth.json"},
 	}}
-	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}); err != nil {
+	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}, []string{"app", "queue"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -369,7 +369,7 @@ func TestGenerateFileMountsNonAppTargetSharedAcrossServices(t *testing.T) {
 	cfg := config.ProjectConfig{Extra: map[string]any{
 		"files": map[string]any{src: "/etc/something/file"},
 	}}
-	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}); err != nil {
+	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}, []string{"app", "queue"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -391,7 +391,7 @@ func TestGenerateFileMountsAppTargetDoesNotWriteToWorkspace(t *testing.T) {
 	cfg := config.ProjectConfig{Extra: map[string]any{
 		"files": map[string]any{src: "/app/.npmrc"},
 	}}
-	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}); err != nil {
+	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}, []string{"app", "queue"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(ws, ".npmrc")); !os.IsNotExist(err) {
@@ -408,7 +408,7 @@ func TestGenerateFileMountsRefusesSymlinkedSlateDir(t *testing.T) {
 	cfg := config.ProjectConfig{Extra: map[string]any{
 		"files": map[string]any{src: "/etc/foo"},
 	}}
-	err := GenerateFileMounts(ws, cfg, &nullScaffold{})
+	err := GenerateFileMounts(ws, cfg, &nullScaffold{}, []string{"app", "queue"})
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Errorf("expected symlink refusal, got %v", err)
 	}
@@ -426,7 +426,7 @@ func TestGenerateFileMountsRefusesSymlinkedFilesDir(t *testing.T) {
 	cfg := config.ProjectConfig{Extra: map[string]any{
 		"files": map[string]any{src: "/etc/foo"},
 	}}
-	err := GenerateFileMounts(ws, cfg, &nullScaffold{})
+	err := GenerateFileMounts(ws, cfg, &nullScaffold{}, []string{"app", "queue"})
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Errorf("expected symlink refusal for .slate/files, got %v", err)
 	}
@@ -449,7 +449,7 @@ func TestGenerateFileMountsClearsSymlinkedFilePayload(t *testing.T) {
 	cfg := config.ProjectConfig{Extra: map[string]any{
 		"files": map[string]any{src: "/etc/foo"},
 	}}
-	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}); err != nil {
+	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}, []string{"app", "queue"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -467,7 +467,7 @@ func TestGenerateFileMountsErrorsWhenScaffoldHasNoAppLikeServices(t *testing.T) 
 	cfg := config.ProjectConfig{Extra: map[string]any{
 		"files": map[string]any{src: "/etc/foo"},
 	}}
-	if err := GenerateFileMounts(ws, cfg, &noAppServicesScaffold{}); err == nil {
+	if err := GenerateFileMounts(ws, cfg, &noAppServicesScaffold{}, nil); err == nil {
 		t.Error("expected error when scaffold has no AppLikeServices() but files configured")
 	}
 }
@@ -477,7 +477,7 @@ func TestGenerateFileMountsScaffoldWithoutQueue(t *testing.T) {
 	cfg := config.ProjectConfig{Extra: map[string]any{
 		"files": map[string]any{src: "/etc/something/file"},
 	}}
-	if err := GenerateFileMounts(ws, cfg, &appOnlyScaffold{}); err != nil {
+	if err := GenerateFileMounts(ws, cfg, &appOnlyScaffold{}, []string{"app"}); err != nil {
 		t.Fatal(err)
 	}
 	override, err := os.ReadFile(filepath.Join(ws, ".slate/compose.files.yaml"))
@@ -499,7 +499,7 @@ func TestGenerateFileMountsClearsStaleOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := GenerateFileMounts(ws, config.ProjectConfig{}, &nullScaffold{}); err != nil {
+	if err := GenerateFileMounts(ws, config.ProjectConfig{}, &nullScaffold{}, []string{"app", "queue"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
@@ -601,7 +601,7 @@ func hasGitignoreLine(content, want string) bool {
 func composeFor(t *testing.T, mainRoot string) string {
 	t.Helper()
 	ws := t.TempDir()
-	if err := Generate(ws, mainRoot, config.ProjectConfig{Scaffold: "laravel"}); err != nil {
+	if err := Generate(ws, mainRoot, config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "laravel"}}, Identity{Project: "proj", Workspace: "ws", Hostname: "proj--ws"}); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(ws, ".slate", "compose.yaml"))
@@ -643,7 +643,7 @@ func envContainerFor(t *testing.T, mainRoot string) string {
 	ws := t.TempDir()
 	g := config.WithPorts(80, 443, true)
 	g.SecretKey = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
-	cfg := config.ProjectConfig{Scaffold: "laravel"}
+	cfg := config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "laravel"}}
 	if err := GenerateEnvContainer(ws, mainRoot, "hydra--feat", "hydra", "feat", cfg, g); err != nil {
 		t.Fatalf("GenerateEnvContainer: %v", err)
 	}

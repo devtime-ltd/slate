@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -40,6 +41,9 @@ func warnIfWorkspaceConfigDiffers(mainRoot, wsDir string) {
 	}
 	if keys := config.HostExecPinned(mainRoot, wsDir); len(keys) > 0 {
 		fmt.Fprintf(os.Stderr, "  note: this workspace's slate.yml changes `%s`; host commands always come from the main checkout's slate.yml, so the change has no effect until it lands there\n", strings.Join(keys, "` and `"))
+	}
+	if keys := config.TrustPinned(mainRoot, wsDir); len(keys) > 0 {
+		fmt.Fprintf(os.Stderr, "  note: this workspace's slate.yml changes `%s`; these come from committed content on this branch (or the main checkout), so commit the change here for it to take effect\n", strings.Join(keys, "` and `"))
 	}
 }
 
@@ -127,11 +131,9 @@ func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg co
 	}
 
 	// Restart worker services (app-like beyond the primary); they don't hot-reload.
-	if s, err := scaffold.Get(cfg.Scaffold); err == nil {
-		if appLike := s.AppLikeServices(); len(appLike) > 1 {
-			for _, svc := range appLike[1:] {
-				_ = compose.Run(env, "restart", svc)
-			}
+	if appLike := appLikeServices(env, cfg); len(appLike) > 1 {
+		for _, svc := range appLike[1:] {
+			_ = compose.Run(env, "restart", svc)
 		}
 	}
 
@@ -211,11 +213,29 @@ func writeProvisioningLock(wsDir string) func(error) {
 	}
 }
 
+// appLikeServices: static for built-in scaffolds, compose-derived for inline
+// ones (signalled by a nil AppLikeServices).
+func appLikeServices(env compose.Env, cfg config.ProjectConfig) []string {
+	s, err := scaffold.Resolve(cfg)
+	if err != nil {
+		return nil
+	}
+	if fixed := s.AppLikeServices(); fixed != nil {
+		return fixed
+	}
+	derived, err := compose.AppLikeServices(env)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: could not derive /app-bind services: %v\n", err)
+		return nil
+	}
+	return derived
+}
+
 // buildServicePorts queries running ports for each subdomain the scaffold exposes.
 func buildServicePorts(env compose.Env, cfg config.ProjectConfig) proxy.ServicePorts {
 	services := proxy.ServicePorts{}
 
-	s, err := scaffold.Get(cfg.Scaffold)
+	s, err := scaffold.Resolve(cfg)
 	if err != nil {
 		return services
 	}
@@ -234,6 +254,23 @@ func buildServicePorts(env compose.Env, cfg config.ProjectConfig) proxy.ServiceP
 func workspaceURLBlock(env compose.Env, hostname string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) string {
 	out := globalCfg.WorkspaceURL(hostname)
 
+	if def := cfg.Scaffold.Inline; def != nil {
+		var subs []string
+		for sub := range def.Subdomains {
+			if sub != "" {
+				subs = append(subs, sub)
+			}
+		}
+		sort.Strings(subs)
+		for _, sub := range subs {
+			d := def.Subdomains[sub]
+			if port, err := compose.Port(env, d.Service, d.Port); err == nil && port != "" {
+				out += "\n" + dimStyle.Render("  ↳ "+sub+": ") + globalCfg.ServiceURL(sub, hostname)
+			}
+		}
+		return out
+	}
+
 	if vitePort, err := compose.Port(env, "vite", cfg.VitePort); err == nil && vitePort != "" {
 		out += "\n" + dimStyle.Render("  ↳ vite: ") + globalCfg.ServiceURL("vite", hostname)
 	}
@@ -247,22 +284,5 @@ func workspaceURLBlock(env compose.Env, hostname string, cfg config.ProjectConfi
 		out += "\n" + dimStyle.Render("  ↳ postgres: ") + fmt.Sprintf("%s.test:%s", hostname, pgPort)
 	}
 
-	return out
-}
-
-// scaffoldSubdomains returns the non-empty subdomain prefixes for the project's
-// scaffold (used when unregistering proxy routes).
-func scaffoldSubdomains(cfg config.ProjectConfig) []string {
-	s, err := scaffold.Get(cfg.Scaffold)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for subdomain := range s.Subdomains() {
-		if subdomain == "" {
-			continue
-		}
-		out = append(out, subdomain)
-	}
 	return out
 }

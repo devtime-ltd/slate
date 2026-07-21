@@ -8,7 +8,7 @@ import (
 )
 
 func TestBriefTextLaravel(t *testing.T) {
-	out := briefText(config.ProjectConfig{Scaffold: "laravel"})
+	out := briefText(config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "laravel"}})
 	for _, want := range []string{"SLATE_WORKSPACE", "slate exec --", "slate artisan", `force="true"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("laravel brief missing %q:\n%s", want, out)

@@ -4,9 +4,7 @@ import (
 	"fmt"
 
 	"github.com/devtime-ltd/slate/internal/compose"
-	"github.com/devtime-ltd/slate/internal/config"
 	"github.com/devtime-ltd/slate/internal/proxy"
-	"github.com/devtime-ltd/slate/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -44,9 +42,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Stopping %s...\n", hostname)
 	compose.Run(env, "down", "--remove-orphans")
 
-	mainRoot, _ := workspace.MainRoot()
-	cfg, _ := config.LoadProject(mainRoot)
-	proxy.Unregister(hostname, scaffoldSubdomains(cfg))
+	proxy.UnregisterAll(hostname)
 
 	fmt.Printf(""+tick()+" %s is down\n", hostname)
 	fmt.Printf("  Bring it back with `slate up %s`, or destroy it with `slate rm %s` if it's no longer needed.\n", name, name)

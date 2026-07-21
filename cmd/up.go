@@ -76,15 +76,6 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 	warnIfWorkspaceConfigDiffers(mainRoot, wsDir)
 
-	if err := scaffold.Generate(wsDir, mainRoot, cfg); err != nil {
-		return fmt.Errorf("generating scaffold: %w", err)
-	}
-	if s, err := scaffold.Get(cfg.Scaffold); err == nil {
-		if err := scaffold.GenerateFileMounts(wsDir, cfg, s); err != nil {
-			return fmt.Errorf("generating file mounts: %w", err)
-		}
-	}
-
 	projectName, err := workspace.ProjectName(cfg.Project)
 	if err != nil {
 		return err
@@ -96,8 +87,22 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	id := scaffold.Identity{Project: projectName, Workspace: name, Hostname: hostname}
+	if err := scaffold.Generate(wsDir, mainRoot, cfg, id); err != nil {
+		return fmt.Errorf("generating scaffold: %w", err)
+	}
 	if err := scaffold.GenerateEnvContainer(wsDir, mainRoot, hostname, projectName, name, cfg, proxyConfig); err != nil {
 		return fmt.Errorf("generating .env.container: %w", err)
+	}
+
+	env, err := compose.NewEnv(name, wsDir, hostname)
+	if err != nil {
+		return err
+	}
+	if s, err := scaffold.Resolve(cfg); err == nil {
+		if err := scaffold.GenerateFileMounts(wsDir, cfg, s, appLikeServices(env, cfg)); err != nil {
+			return fmt.Errorf("generating file mounts: %w", err)
+		}
 	}
 
 	opts := provisionOpts{fresh: upFresh, build: upBuild, wipe: upFresh}
@@ -106,10 +111,6 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return runBackgroundProvision(cfg, name, wsDir, opts, cd)
 	}
 
-	env, err := compose.NewEnv(name, wsDir, hostname)
-	if err != nil {
-		return err
-	}
 	if err := runWorkspaceLifecycle(env, name, wsDir, hostname, cfg, proxyConfig, opts); err != nil {
 		return err
 	}

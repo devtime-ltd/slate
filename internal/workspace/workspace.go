@@ -195,6 +195,45 @@ func parseWorktrees(porcelain string) []worktreeEntry {
 	return entries
 }
 
+// CommittedFile reads path from the workspace branch's committed tree via the
+// main repository's git dir. The main .git is mounted read-only in containers,
+// so unlike the worktree's working files this content is always host-authored.
+// ok is false when the branch or path isn't committed (or git fails).
+func CommittedFile(mainRoot, wsDir, path string) ([]byte, bool) {
+	if mainRoot == "" || wsDir == "" {
+		return nil, false
+	}
+	gitDir := filepath.Join(mainRoot, ".git")
+	out, err := exec.Command("git", "--git-dir", gitDir, "worktree", "list", "--porcelain").Output()
+	if err != nil {
+		return nil, false
+	}
+
+	resolve := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return filepath.Clean(p)
+	}
+	branch := ""
+	target := resolve(wsDir)
+	for _, e := range parseWorktrees(string(out)) {
+		if e.branch != "" && resolve(e.path) == target {
+			branch = e.branch
+			break
+		}
+	}
+	if branch == "" {
+		return nil, false
+	}
+
+	data, err := exec.Command("git", "--git-dir", gitDir, "show", branch+":"+filepath.ToSlash(path)).Output()
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
+
 // WorktreeRegistered reports whether dir is still registered as a worktree.
 // A registration outlives a manual `rm -rf` of the directory.
 func WorktreeRegistered(dir string) bool {

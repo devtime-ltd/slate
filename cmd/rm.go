@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/devtime-ltd/slate/internal/compose"
-	"github.com/devtime-ltd/slate/internal/config"
 	"github.com/devtime-ltd/slate/internal/proxy"
 	"github.com/devtime-ltd/slate/internal/workspace"
 	"github.com/spf13/cobra"
@@ -91,8 +90,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Destroying %s...\n", hostname)
 	compose.Run(env, "down", "-v", "--remove-orphans")
 
-	cfg, _ := config.LoadProject(mainRoot)
-	proxy.Unregister(hostname, scaffoldSubdomains(cfg))
+	proxy.UnregisterAll(hostname)
 
 	branch := workspace.WorktreeBranch(wsDir)
 	removeErr := workspace.RemoveWorktree(wsDir)
@@ -152,8 +150,7 @@ func rmOrphaned(name, wsDir, hostname string) error {
 	}
 
 	mainRoot, _ := workspace.MainRoot()
-	cfg, _ := config.LoadProject(mainRoot)
-	proxy.Unregister(hostname, scaffoldSubdomains(cfg))
+	proxy.UnregisterAll(hostname)
 
 	// The stale registration still knows its branch; read it before pruning.
 	branch := workspace.WorktreeBranch(wsDir)

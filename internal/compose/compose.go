@@ -1,11 +1,14 @@
 package compose
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/devtime-ltd/slate/internal/config"
@@ -20,6 +23,10 @@ type Env struct {
 }
 
 func buildCmd(env Env, interactive bool, args ...string) *exec.Cmd {
+	return buildComposeCmd(env, interactive, true, args...)
+}
+
+func buildComposeCmd(env Env, interactive, withOverride bool, args ...string) *exec.Cmd {
 	uid, gid := "1000", "1000"
 	if runtime.GOOS != "darwin" {
 		uid = fmt.Sprintf("%d", os.Getuid())
@@ -30,7 +37,7 @@ func buildCmd(env Env, interactive bool, args ...string) *exec.Cmd {
 	filesOverride := filepath.Join(env.WorkspaceDir, ".slate", "compose.files.yaml")
 
 	cmdArgs := []string{"compose", "-f", composeFile}
-	if _, err := os.Stat(filesOverride); err == nil {
+	if _, err := os.Stat(filesOverride); withOverride && err == nil {
 		cmdArgs = append(cmdArgs, "-f", filesOverride)
 	}
 	// only when present: down/rm must work on half-provisioned workspaces
@@ -99,6 +106,58 @@ func ExecPiped(env Env, service string, command ...string) error {
 	args := []string{"exec", "-T", service}
 	args = append(args, command...)
 	return buildCmd(env, true, args...).Run()
+}
+
+// AppLikeServices derives the services that bind-mount /app ("app" first) via
+// `docker compose config`, which flattens anchors, merges, and interpolation.
+// Base compose file only: a stale compose.files.yaml from a previous run could
+// break config before GenerateFileMounts regenerates it.
+func AppLikeServices(env Env) ([]string, error) {
+	cmd := buildComposeCmd(env, false, false, "config", "--format", "json")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			return nil, fmt.Errorf("resolving compose config: %s", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return nil, fmt.Errorf("resolving compose config: %w", err)
+	}
+	return appLikeFromConfigJSON(out)
+}
+
+func appLikeFromConfigJSON(data []byte) ([]string, error) {
+	var doc struct {
+		Services map[string]struct {
+			Volumes []struct {
+				Type   string `json:"type"`
+				Target string `json:"target"`
+			} `json:"volumes"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("parsing compose config: %w", err)
+	}
+
+	var names []string
+	for name, svc := range doc.Services {
+		for _, v := range svc.Volumes {
+			if v.Type == "bind" && v.Target == "/app" {
+				names = append(names, name)
+				break
+			}
+		}
+	}
+	sort.Strings(names)
+	for i, n := range names {
+		if n == "app" && i != 0 {
+			copy(names[1:i+1], names[:i])
+			names[0] = "app"
+			break
+		}
+	}
+	return names, nil
 }
 
 func Port(env Env, service string, containerPort int) (string, error) {

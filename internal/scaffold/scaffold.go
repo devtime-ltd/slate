@@ -17,9 +17,6 @@ import (
 
 type Scaffold interface {
 	Name() string
-	FS() embed.FS
-	FileMap(slateDir string) map[string]string
-	RenderDockerfile(content string, cfg config.ProjectConfig) (string, error)
 	DefaultFiles() map[string]string                                             // host path -> container path
 	DefaultEnv(hostname string, globalCfg config.GlobalConfig) map[string]string // default .env.container vars
 	Tools() map[string]config.Tool                                               // exec + db tools
@@ -27,13 +24,29 @@ type Scaffold interface {
 	// Empty key "" is the main app at hostname.test; "vite" becomes vite.hostname.test, etc.
 	Subdomains() map[string]Subdomain
 	// AppLikeServices lists services that share the /app bind. First is the
-	// primary; /app/* file mounts go on it alone (others would race).
+	// primary; /app/* file mounts go on it alone (others would race). nil
+	// means derive from the rendered compose file (inline scaffolds).
 	AppLikeServices() []string
+}
+
+// embeddedScaffold adds the go:embed generation half only built-ins have.
+type embeddedScaffold interface {
+	Scaffold
+	FS() embed.FS
+	FileMap(slateDir string) map[string]string
+	RenderDockerfile(content string, cfg config.ProjectConfig) (string, error)
 }
 
 type Subdomain struct {
 	Service string
 	Port    int
+}
+
+// Identity is the workspace naming trio, exposed to compose templates.
+type Identity struct {
+	Project   string
+	Workspace string
+	Hostname  string
 }
 
 var registry = map[string]Scaffold{}
@@ -49,30 +62,45 @@ func Get(name string) (Scaffold, error) {
 		for n := range registry {
 			names = append(names, n)
 		}
-		return nil, fmt.Errorf("unknown scaffold: %s (available: %s or none)", name, strings.Join(names, ", "))
+		sort.Strings(names)
+		return nil, fmt.Errorf("unknown scaffold: %s (available: %s, or an inline scaffold map; see README)", name, strings.Join(names, ", "))
 	}
 	return s, nil
 }
 
-func Generate(workspaceDir, mainRoot string, cfg config.ProjectConfig) error {
+// Resolve returns the scaffold slate.yml selects. No scaffold (and the legacy
+// `none`) resolves to an empty inline one so config-defined tools still work.
+func Resolve(cfg config.ProjectConfig) (Scaffold, error) {
+	if cfg.Scaffold.Inline != nil {
+		return &inlineScaffold{def: cfg.Scaffold.Inline}, nil
+	}
+	switch cfg.Scaffold.Name {
+	case "", "none":
+		return &inlineScaffold{def: &config.InlineScaffold{}}, nil
+	}
+	return Get(cfg.Scaffold.Name)
+}
+
+func Generate(workspaceDir, mainRoot string, cfg config.ProjectConfig, id Identity) error {
 	slateDir := filepath.Join(workspaceDir, ".slate")
 	if err := os.MkdirAll(slateDir, 0o755); err != nil {
 		return fmt.Errorf("creating .slate dir: %w", err)
 	}
 
-	name := cfg.Scaffold
-	if name == "" || name == "none" {
-		return nil
-	}
-
-	s, err := Get(name)
+	s, err := Resolve(cfg)
 	if err != nil {
 		return err
 	}
 
-	fileMap := s.FileMap(slateDir)
+	es, ok := s.(embeddedScaffold)
+	if !ok {
+		return generateInline(workspaceDir, mainRoot, cfg, id)
+	}
 
-	entries, err := s.FS().ReadDir(name)
+	name := s.Name()
+	fileMap := es.FileMap(slateDir)
+
+	entries, err := es.FS().ReadDir(name)
 	if err != nil {
 		return fmt.Errorf("reading scaffold %s: %w", name, err)
 	}
@@ -83,7 +111,7 @@ func Generate(workspaceDir, mainRoot string, cfg config.ProjectConfig) error {
 			continue
 		}
 
-		data, err := s.FS().ReadFile(name + "/" + entry.Name())
+		data, err := es.FS().ReadFile(name + "/" + entry.Name())
 		if err != nil {
 			return fmt.Errorf("reading %s: %w", entry.Name(), err)
 		}
@@ -91,14 +119,14 @@ func Generate(workspaceDir, mainRoot string, cfg config.ProjectConfig) error {
 		content := string(data)
 
 		if entry.Name() == "Dockerfile.tmpl" {
-			content, err = s.RenderDockerfile(content, cfg)
+			content, err = es.RenderDockerfile(content, cfg)
 			if err != nil {
 				return fmt.Errorf("rendering Dockerfile: %w", err)
 			}
 		}
 
 		if entry.Name() == "compose.yaml.tmpl" {
-			content, err = renderCompose(content, mainRoot, cfg)
+			content, err = renderCompose(content, mainRoot, cfg, id)
 			if err != nil {
 				return fmt.Errorf("rendering compose.yaml: %w", err)
 			}
@@ -116,12 +144,17 @@ func Generate(workspaceDir, mainRoot string, cfg config.ProjectConfig) error {
 // has no real .env file, otherwise Docker silently creates the missing source
 // as a directory in the user's project. A directory at that path counts as
 // absent so a leftover one is never re-mounted.
-func renderCompose(content, mainRoot string, cfg config.ProjectConfig) (string, error) {
+func renderCompose(content, mainRoot string, cfg config.ProjectConfig, id Identity) (string, error) {
 	hasMainEnv := false
 	if mainRoot != "" {
 		if info, err := os.Stat(filepath.Join(mainRoot, ".env")); err == nil && !info.IsDir() {
 			hasMainEnv = true
 		}
+	}
+
+	var vars map[string]any
+	if cfg.Scaffold.Inline != nil {
+		vars = cfg.Scaffold.Inline.Vars
 	}
 
 	tmpl, err := template.New("compose").Parse(content)
@@ -132,6 +165,10 @@ func renderCompose(content, mainRoot string, cfg config.ProjectConfig) (string, 
 	if err := tmpl.Execute(&b, map[string]any{
 		"HasMainEnv": hasMainEnv,
 		"Database":   cfg.Database,
+		"Project":    id.Project,
+		"Workspace":  id.Workspace,
+		"Hostname":   id.Hostname,
+		"Vars":       vars,
 	}); err != nil {
 		return "", err
 	}
@@ -156,7 +193,7 @@ func rootEnvHasValue(mainRoot, key string) bool {
 	return false
 }
 
-func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffold) error {
+func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffold, appLike []string) error {
 	files := make(map[string]string)
 	for k, v := range s.DefaultFiles() {
 		files[k] = v
@@ -193,9 +230,9 @@ func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffol
 		return fmt.Errorf("creating files dir: %w", err)
 	}
 
-	services := s.AppLikeServices()
+	services := appLike
 	if len(services) == 0 {
-		return fmt.Errorf("scaffold %q declares no AppLikeServices(); file mounts cannot be applied", s.Name())
+		return fmt.Errorf("no services share the /app bind (scaffold %q); file mounts cannot be applied", s.Name())
 	}
 	primary := services[0]
 
@@ -361,7 +398,7 @@ func GenerateEnvContainer(workspaceDir, mainRoot, hostname, project, workspace s
 	defaults := make(map[string]string)
 
 	// Get scaffold-specific defaults if available
-	if s, err := Get(cfg.Scaffold); err == nil {
+	if s, err := Resolve(cfg); err == nil {
 		for k, v := range s.DefaultEnv(hostname, globalCfg) {
 			defaults[k] = v
 		}
@@ -407,7 +444,7 @@ func BuildLifecycleScript(cfg config.ProjectConfig, isNew bool) string {
 	var parts []string
 
 	upScript := cfg.Setup
-	defaultUp := config.DefaultSetupForScaffold(cfg.Scaffold)
+	defaultUp := config.DefaultSetupForScaffold(cfg.Scaffold.Name)
 	if upScript == "" {
 		upScript = defaultUp
 	} else {
@@ -419,7 +456,7 @@ func BuildLifecycleScript(cfg config.ProjectConfig, isNew bool) string {
 
 	if isNew {
 		newScript := cfg.Fresh
-		defaultNew := config.DefaultFreshSetupForScaffold(cfg.Scaffold)
+		defaultNew := config.DefaultFreshSetupForScaffold(cfg.Scaffold.Name)
 		if newScript == "" {
 			newScript = defaultNew
 		} else {
