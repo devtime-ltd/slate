@@ -57,6 +57,7 @@ type ProjectConfig struct {
 	VitePort int                 `yaml:"vite_port"`
 	Tools    map[string]ExecTool `yaml:"tools"`
 	Agent    AgentCmd            `yaml:"agent"`
+	New      string              `yaml:"new"`
 	Up       string              `yaml:"up"`
 	Extra    map[string]any      `yaml:",inline"`
 }
@@ -359,6 +360,7 @@ func LoadProjectForWorkspace(mainRoot, wsDir string) (ProjectConfig, error) {
 		}
 		wsCfg.Project = mainCfg.Project
 		wsCfg.Agent = mainCfg.Agent
+		wsCfg.New = mainCfg.New
 		wsCfg.Up = mainCfg.Up
 		cfg = wsCfg
 	}
@@ -459,6 +461,9 @@ func HostExecPinned(mainRoot, wsDir string) []string {
 	var pinned []string
 	if !wsCfg.Agent.IsZero() && wsCfg.Agent != mainCfg.Agent {
 		pinned = append(pinned, "agent")
+	}
+	if wsCfg.New != "" && wsCfg.New != mainCfg.New {
+		pinned = append(pinned, "new")
 	}
 	if wsCfg.Up != "" && wsCfg.Up != mainCfg.Up {
 		pinned = append(pinned, "up")

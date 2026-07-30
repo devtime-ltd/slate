@@ -88,12 +88,19 @@ func runProvision(cmd *cobra.Command, args []string) error {
 	})
 }
 
-// runBackgroundProvision forks the bg provisioner and then either drops into
-// a shell at the workspace dir (cd=true) or prints the path and exits. Never
-// the up hook: the containers are still provisioning.
-func runBackgroundProvision(cfg config.ProjectConfig, name, wsDir string, opts provisionOpts, cd bool) error {
+// runBackgroundProvision forks the bg provisioner, then runs the `new:` hook
+// (when configured and cd-gated), drops into a shell at the workspace dir
+// (cd=true), or prints the path and exits. Never the up hook: the containers
+// are still provisioning; the new hook exists precisely to run before them.
+func runBackgroundProvision(cfg config.ProjectConfig, name, wsDir string, opts provisionOpts, cd bool, newHook string) error {
 	if err := detachProvision(name, wsDir, opts); err != nil {
 		return err
+	}
+	if cd && newHook != "" {
+		if err := runHostCommand(cfg, newHook, name, wsDir, opts.fresh); err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
+		}
+		return spawnShellAt(wsDir)
 	}
 	if !cfg.Agent.IsZero() {
 		fmt.Println("Run `slate agent` once provisioning completes.")

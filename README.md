@@ -89,7 +89,7 @@ Add `--project <name>` to any command to target a project other than the current
 ### Useful flags
 
 - `slate new <name> -b <branch>`: custom branch name (default: `slate/<name>`).
-- `slate new <name> --bg`: fork the slow phase (build + lifecycle) to the background; the fast phase (worktree + scaffold) runs inline so editing can start immediately. Progress is captured in `.slate/workspaces/<name>/.slate/provision.log` and surfaced as `provisioning` in `slate ls` (`failed` if it errors). While a bg provision is in flight, `slate up` and `slate restart` refuse to touch the workspace; `slate exec`, `slate shell`, and the scaffold tools wait for it instead of failing; `slate wait` blocks until it finishes (non-zero exit + log tail on failure); `slate rm` aborts it as an escape hatch.
+- `slate new <name> --bg`: fork the slow phase (build + lifecycle) to the background; the fast phase (worktree + scaffold) runs inline so editing can start immediately. Progress is captured in `.slate/workspaces/<name>/.slate/provision.log` and surfaced as `provisioning` in `slate ls` (`failed` if it errors). While a bg provision is in flight, `slate up` and `slate restart` refuse to touch the workspace; `slate exec`, `slate shell`, and the scaffold tools wait for it instead of failing; `slate wait` blocks until it finishes (non-zero exit + log tail on failure); `slate rm` aborts it as an escape hatch. A configured `new:` hook backgrounds provisioning automatically, no flag needed (see [Agent](#agent--new--up-what-newup-drop-you-into)).
 - `slate new <name> --cd` / `--cd=false`: opt in or out of dropping into a shell at the new workspace. Default comes from `auto_cd` in `~/.config/slate/config.yml` (default `true`), suppressed when stdio isn't an interactive terminal so scripts/CI/agents never block on a spawned shell. With `--bg` the shell is spawned immediately; without, after provisioning finishes.
 - `slate new <name> --adopt`: carry your uncommitted changes from the main checkout into the new worktree (tracked changes patched in, untracked files copied). The main checkout is left untouched.
 - `slate up [name] --fresh`: recreate containers + volumes (worktree code preserved) and run the new-workspace lifecycle.
@@ -145,7 +145,7 @@ That's it for most projects. The scaffold provides sensible defaults for the Doc
 Each workspace uses the `slate.yml` in its **own worktree** when present, so a branch can change config (packages, hooks, tools) and test it with `slate up` before merging; slate prints a note whenever a workspace's config differs from the main checkout's. Exceptions:
 
 - `project:` is always taken from the main checkout so a branch can't change the workspace's identity (hostname, compose project, database names).
-- `agent:` and `up:` run on the host and only ever come from the main checkout (see [Agent](#agent--up-what-newup-drop-you-into)).
+- `agent:`, `new:`, and `up:` run on the host and only ever come from the main checkout (see [Agent](#agent--new--up-what-newup-drop-you-into)).
 - `scaffold:`, `files:`, `database:`, and `env:` (the latter two interpolate into compose files) can reach host resources, so they come from **committed content on the workspace branch** (containers can't commit; the `.git` mount is read-only) or, when the branch doesn't commit a `slate.yml`, from the main checkout. Uncommitted worktree edits to them are inert and get a note; commit them on the branch to test. This keeps a rewritten worktree config (e.g. by a compromised dependency) from mounting host files into containers on your next `slate up`.
 
 Heavier changes like swapping `scaffold:` usually want `slate up --fresh`.
@@ -206,20 +206,23 @@ tools:
 
 User-defined tools in `slate.yml` are always exec tools (run a command in a container).
 
-## Agent + up: what `new`/`up` drop you into
+## Agent + new + up: what `new`/`up` drop you into
 
-When provisioning finishes at an interactive terminal, slate drops you into the workspace (the `auto_cd` behaviour): it runs the `up` hook if configured, then a shell. `agent` defines the command `slate agent [name]` runs; point `up` at it to land in your agent after every `new`/`up`:
+At an interactive terminal, slate drops you into the workspace (the `auto_cd` behaviour) through two hooks: `new:` fires straight after `slate new`'s fast phase, with provisioning forked to the background behind it; `up:` fires once provisioning finishes. Then a shell. `agent` defines the command `slate agent [name]` runs; point the hooks at it to land in your agent:
 
 ```yaml
 agent:
   - claude --name "{{PROJECT}}--{{WORKSPACE}}"   # first run (SLATE_FRESH=1)
   - claude --continue                            # thereafter
-up: slate agent
+new: slate agent   # slate new: runs immediately, containers provision behind it
+up: slate agent    # slate up: runs after provisioning finishes
 ```
 
-`agent` is either a single command or a `[first-run, thereafter]` pair; the first-run variant is picked when `SLATE_FRESH=1`, which slate sets when `up` fires from a freshly provisioned `slate new`. With the pair above, every new workspace starts a claude session named `<project>--<workspace>` (resumable later with `claude --resume <name>`), and re-entry continues where you left off.
+`agent` is either a single command or a `[first-run, thereafter]` pair; the first-run variant is picked when `SLATE_FRESH=1`, which slate sets for hooks fired from a fresh `slate new`. With the pair above, every new workspace starts a claude session named `<project>--<workspace>` (resumable later with `claude --resume <name>`), and re-entry continues where you left off.
 
-Both commands run in the worktree via `sh -c` with `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` expanded and `SLATE_WORKSPACE`, `SLATE_PROJECT`, `SLATE_FRESH`, `SLATE_PROVISIONING` in the environment. `slate agent` with no `agent:` configured is an error. `up` can be anything:
+With `new:` configured, `slate new foo` needs no flags and no waiting: the worktree and scaffold are created inline (seconds), provisioning forks to the background, and the hook runs immediately, so you brief your agent while the containers come up. The hook's session gets `SLATE_PROVISIONING=1` (0 otherwise) so tooling can tell it started mid-provision, and `slate exec` plus the scaffold tools block on the in-flight provision automatically, so the agent's first container command simply waits instead of failing. `slate wait` is the explicit check (instant when ready, non-zero exit with the log tail when provisioning failed); the `slate brief` cheatsheet tells your agent about it. Both hooks sit behind the same interactive-terminal gate as `auto_cd`, so scripts and CI invoking `slate new` still provision synchronously.
+
+All three commands run in the worktree via `sh -c` with `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` expanded and `SLATE_WORKSPACE`, `SLATE_PROJECT`, `SLATE_FRESH`, `SLATE_PROVISIONING` in the environment. `slate agent` with no `agent:` configured is an error. The hooks can be anything:
 
 ```yaml
 # a session that survives your terminal app and allows multiple attachments
@@ -228,7 +231,7 @@ up: tmux new-session -A -s {{HOSTNAME}} 'slate agent'
 
 (`tmux new -A` re-attaches an existing server session, which keeps its original environment, so `SLATE_FRESH` only reaches `slate agent` on the session that created the server.)
 
-These commands execute on your **host**: your normal claude login, skills, MCPs, and git access all apply. Because of that, `agent` and `up` are always read from the **main checkout's** `slate.yml` and never from the workspace copy: the worktree is writable by container code, so a compromised dependency could otherwise edit `slate.yml` and wait for your next slate command. Workspace-side edits to these fields are inert and get a note saying so; land them in the main checkout to take effect. The blast-radius protection stays where it always was, in the containers that run the app and its dependency installs.
+These commands execute on your **host**: your normal claude login, skills, MCPs, and git access all apply. Because of that, `agent`, `new`, and `up` are always read from the **main checkout's** `slate.yml` and never from the workspace copy: the worktree is writable by container code, so a compromised dependency could otherwise edit `slate.yml` and wait for your next slate command. Workspace-side edits to these fields are inert and get a note saying so; land them in the main checkout to take effect. The blast-radius protection stays where it always was, in the containers that run the app and its dependency installs.
 
 ### Slate for agents
 

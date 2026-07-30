@@ -407,7 +407,7 @@ func TestLoadProjectForWorkspace(t *testing.T) {
 	}
 
 	// workspace slate.yml wins, but project identity and host-exec fields stay main's
-	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nproject: renamed\napp_port: 9090\nagent: evil\nup: evil hook\n"), 0o644)
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nproject: renamed\napp_port: 9090\nagent: evil\nnew: evil fast hook\nup: evil hook\n"), 0o644)
 	cfg, err = LoadProjectForWorkspace(mainRoot, wsDir)
 	if err != nil {
 		t.Fatal(err)
@@ -418,21 +418,21 @@ func TestLoadProjectForWorkspace(t *testing.T) {
 	if cfg.Project != "mainname" {
 		t.Errorf("project should stay pinned to main, got %q", cfg.Project)
 	}
-	if !cfg.Agent.IsZero() || cfg.Up != "" {
-		t.Errorf("agent/up should stay pinned to main, got %+v / %q", cfg.Agent, cfg.Up)
+	if !cfg.Agent.IsZero() || cfg.New != "" || cfg.Up != "" {
+		t.Errorf("agent/new/up should stay pinned to main, got %+v / %q / %q", cfg.Agent, cfg.New, cfg.Up)
 	}
-	if pinned := HostExecPinned(mainRoot, wsDir); !slices.Equal(pinned, []string{"agent", "up"}) {
-		t.Errorf("HostExecPinned = %v, want [agent up]", pinned)
+	if pinned := HostExecPinned(mainRoot, wsDir); !slices.Equal(pinned, []string{"agent", "new", "up"}) {
+		t.Errorf("HostExecPinned = %v, want [agent new up]", pinned)
 	}
 
 	// main's host-exec fields apply inside the workspace
-	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: laravel\nproject: mainname\nagent: claude\nup: slate agent\n"), 0o644)
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: laravel\nproject: mainname\nagent: claude\nnew: slate agent\nup: slate agent\n"), 0o644)
 	cfg, err = LoadProjectForWorkspace(mainRoot, wsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Agent.Again != "claude" || cfg.Up != "slate agent" {
-		t.Errorf("main agent/up should apply, got %+v / %q", cfg.Agent, cfg.Up)
+	if cfg.Agent.Again != "claude" || cfg.New != "slate agent" || cfg.Up != "slate agent" {
+		t.Errorf("main agent/new/up should apply, got %+v / %q / %q", cfg.Agent, cfg.New, cfg.Up)
 	}
 
 	// a workspace slate.yml that simply omits the fields isn't "changing" them

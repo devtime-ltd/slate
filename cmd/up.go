@@ -108,7 +108,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	opts := provisionOpts{fresh: upFresh, build: upBuild, wipe: upFresh}
 
 	if upBg {
-		return runBackgroundProvision(cfg, name, wsDir, opts, cd)
+		return runBackgroundProvision(cfg, name, wsDir, opts, cd, "")
 	}
 
 	if err := runWorkspaceLifecycle(env, name, wsDir, hostname, cfg, proxyConfig, opts); err != nil {
