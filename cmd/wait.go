@@ -17,10 +17,10 @@ var waitTimeout time.Duration
 var waitCmd = &cobra.Command{
 	Use:   "wait [workspace]",
 	Short: "Block until a workspace finishes provisioning",
-	Long: `Blocks while a background provision (slate new/up --bg) is in flight, then
-exits 0 when the workspace is ready. Exits non-zero, printing the tail of the
-provision log, when provisioning failed. Returns immediately when nothing is
-in flight.`,
+	Long: `Blocks while a background provision (slate new/up --bg, or a configured
+new: hook) is in flight, then exits 0 when the workspace is ready. Exits
+non-zero, printing the tail of the provision log, when provisioning failed.
+Returns immediately when nothing is in flight.`,
 	GroupID: "workspace",
 	Args:    cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

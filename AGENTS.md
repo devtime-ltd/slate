@@ -63,19 +63,30 @@ The Scaffold interface exposes a `Tools() map[string]config.Tool` method. `Tool`
 
 User-defined tools in `slate.yml` are always exec tools. Scaffolds can mix both.
 
-## Agent (`agent:`) + up hook (`up:`)
+## Agent (`agent:`) + new/up hooks (`new:`/`up:`)
 
 `agent:` is the command `slate agent [name]` runs in the worktree: a single
 command or a `[first-run, thereafter]` pair (first-run picked when
-SLATE_FRESH=1). `up:` runs after `new`/`up` before dropping to the shell
-(behind the auto_cd/--cd TTY gate); point it at `slate agent` to land in the
-agent, with `slate new` setting SLATE_FRESH=1 so the pair's first-run variant
-fires. Both run through `sh -c` with {{WORKSPACE}}/{{PROJECT}}/{{HOSTNAME}}
-expanded and SLATE_WORKSPACE/SLATE_PROJECT/SLATE_FRESH set. They execute on
-the HOST by design (the user's own login/skills/MCPs/git apply), so both
-fields are pinned to the MAIN checkout's slate.yml: the worktree copy is
-container-writable and must never drive host execution. Workspace-side edits
-to them are inert and surface a note (`config.HostExecPinned`).
+SLATE_FRESH=1). Two hooks fire it (or anything else): `new:` runs straight
+after `slate new`'s fast phase and its presence auto-backgrounds provisioning
+(the point: enter an agent session while containers come up); `up:` runs
+after provisioning finishes before dropping to the shell, and is never run on
+the bg path. Both sit behind the auto_cd/--cd TTY gate, and all three
+commands run through `sh -c` with {{WORKSPACE}}/{{PROJECT}}/{{HOSTNAME}}
+expanded and SLATE_WORKSPACE/SLATE_PROJECT/SLATE_FRESH/SLATE_PROVISIONING
+set (PROVISIONING=1 when the lockfile shows a live bg provision at launch).
+They execute on the HOST by design (the user's own login/skills/MCPs/git
+apply), so all three fields are pinned to the MAIN checkout's slate.yml: the
+worktree copy is container-writable and must never drive host execution.
+Workspace-side edits to them are inert and surface a note
+(`config.HostExecPinned`).
+
+Sessions entered mid-provision stay safe via `cmd/wait.go`: `slate wait`
+blocks on the provisioning lockfile and reports the outcome (log tail on
+failure), and exec/shell/tool commands call `awaitProvision` before touching
+containers. A stale `.failed` marker deliberately doesn't block those
+commands (debugging a half-provisioned workspace is legitimate); only a live
+or died-in-flight provision does.
 
 Related trust rule: `scaffold:`, `files:`, `database:`, and `env:`
 (host-reaching config: they can mount host files, define containers, or
@@ -180,7 +191,7 @@ Suggested order:
 | Caddy container (now) → embedded Caddy (P1) | Container removes Caddy install dep today; embedded removes container too |
 | Per-installation secret key for passwords | Same workspace name gives different passwords across installations |
 | Worktree slate.yml authoritative, `project:` pinned to main | Branches can test config changes before merging without forking a workspace's identity mid-life |
-| Agent/up run host-side (no in-container agent) | The user's own tooling/credentials apply; slate stays vendor-neutral; containers keep isolating app code and deps |
+| Agent/new/up run host-side (no in-container agent) | The user's own tooling/credentials apply; slate stays vendor-neutral; containers keep isolating app code and deps |
 | Hash-suffix on DB names | Safe across all databases (max 63 chars), unique per project+workspace+label |
 | `--bg` fast/slow split | Fast phase (worktree+scaffold) runs inline so editing starts immediately; slow phase (build+lifecycle) detaches with `Setsid` and survives parent close |
 | Lockfile-driven status (not in-memory) | Survives slate restarts, visible across shells, single source of truth for concurrency guards |

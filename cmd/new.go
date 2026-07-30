@@ -142,8 +142,11 @@ func createWorkspace(name, branch string, bg, cd, adopt bool) error {
 
 	opts := provisionOpts{fresh: true, build: true}
 
-	if bg {
-		return runBackgroundProvision(cfg, name, wsDir, opts, cd)
+	// A configured `new:` hook opts the project into background provisioning
+	// so the hook runs right after the fast phase, while containers come up.
+	// Same cd/TTY gate as the up hook: scripts and CI get sync provisioning.
+	if bg || (cd && cfg.New != "") {
+		return runBackgroundProvision(cfg, name, wsDir, opts, cd, cfg.New)
 	}
 
 	if err := runWorkspaceLifecycle(env, name, wsDir, hostname, cfg, proxyConfig, opts); err != nil {
