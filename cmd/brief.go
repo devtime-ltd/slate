@@ -36,17 +36,18 @@ func init() {
 }
 
 func briefText(cfg config.ProjectConfig) string {
+	// Placeholders stay inside backticks throughout: bare <name>/<cmd> reads
+	// as an HTML tag to markdown renderers and disappears.
 	var b strings.Builder
-	b.WriteString(`## Slate workspaces
-
-This project uses slate: each workspace is a git worktree under .slate/workspaces/<name> with its own containers, database, and HTTPS URL.
-
-- Target a workspace non-interactively: set SLATE_WORKSPACE=<name> (honoured by every command) or run from inside its worktree. Never rely on interactive pickers or prompts.
-- Lifecycle: slate new <name> | slate up | slate down | slate rm -f <name> | slate ls
-- Run anything in the app container: slate exec -- <cmd> (no TTY, stdin forwarded; -s <service> for other containers)
-- App URL: https://<project>--<workspace>.test; logs: slate logs [service]
-- A workspace may still be provisioning in the background right after creation (SLATE_PROVISIONING=1 in this session's env means it started that way). slate exec and the tool shortcuts wait for it automatically; run slate wait to block until it's ready explicitly (instant when already up, non-zero exit + log tail if provisioning failed).
-`)
+	b.WriteString("## Slate workspaces\n" +
+		"\n" +
+		"This project uses slate: each workspace is a git worktree under `.slate/workspaces/<name>` with its own containers, database, and HTTPS URL.\n" +
+		"\n" +
+		"- Target a workspace non-interactively: set `SLATE_WORKSPACE=<name>` (honoured by every command) or run from inside its worktree. Never rely on interactive pickers or prompts.\n" +
+		"- Lifecycle: `slate new <name>` | `slate up` | `slate down` | `slate rm -f <name>` | `slate ls`\n" +
+		"- Run anything in the app container: `slate exec -- <cmd>` (no TTY, stdin forwarded; `-s <service>` for other containers)\n" +
+		"- App URL: `https://<project>--<workspace>.test`; logs: `slate logs [service]`\n" +
+		"- A workspace may still be provisioning in the background right after creation (`SLATE_PROVISIONING=1` in this session's env means it started that way). `slate exec` and the tool shortcuts wait for it automatically; run `slate wait` to block until it's ready explicitly (instant when already up, non-zero exit + log tail if provisioning failed).\n")
 
 	var toolNames []string
 	tools := map[string]config.Tool{}
@@ -61,11 +62,14 @@ This project uses slate: each workspace is a git worktree under .slate/workspace
 	}
 	sort.Strings(toolNames)
 	if len(toolNames) > 0 {
-		fmt.Fprintf(&b, "- Tool shortcuts (run in the right container): slate %s\n", strings.Join(toolNames, " | slate "))
+		for i, name := range toolNames {
+			toolNames[i] = "`slate " + name + "`"
+		}
+		fmt.Fprintf(&b, "- Tool shortcuts (run in the right container): %s\n", strings.Join(toolNames, " | "))
 	}
 
 	if cfg.Scaffold.Name == "laravel" {
-		b.WriteString("- Tests in containers: DB_* are real process env and beat phpunit.xml <env> entries unless those set force=\"true\"; without that, run tests as DB_CONNECTION=sqlite DB_DATABASE=:memory: slate exec -- ./vendor/bin/pest so they never hit the dev database.\n")
+		b.WriteString("- Tests in containers: DB_* are real process env and beat phpunit.xml `<env>` entries unless those set `force=\"true\"`; without that, run tests as `DB_CONNECTION=sqlite DB_DATABASE=:memory: slate exec -- ./vendor/bin/pest` so they never hit the dev database.\n")
 	}
 	return b.String()
 }
