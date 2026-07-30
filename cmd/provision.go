@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/devtime-ltd/slate/internal/compose"
 	"github.com/devtime-ltd/slate/internal/config"
@@ -48,6 +49,19 @@ func runProvision(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// Handshake: the parent publishes our pid to the lock right after
+	// forking us. Wait until it actually holds our pid (a stale lock from a
+	// crashed run doesn't count) so that publication can't land after our
+	// cleanup and resurrect a finished provision's lock; proceed after 2s
+	// regardless (the parent may have died).
+	for start := time.Now(); time.Since(start) < 2*time.Second; {
+		if pid, _ := readProvisioningLock(wsDir); pid == os.Getpid() {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
 	cfg, err := config.LoadProjectForWorkspace(mainRoot, wsDir)
 	if err != nil {
 		return err
@@ -99,7 +113,7 @@ func detachProvision(name, wsDir string, opts provisionOpts) error {
 		return err
 	}
 
-	logPath := filepath.Join(wsDir, ".slate", "provision.log")
+	logPath := provisionLogPath(wsDir)
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		return fmt.Errorf("creating log file: %w", err)
@@ -131,6 +145,17 @@ func detachProvision(name, wsDir string, opts provisionOpts) error {
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
 		return fmt.Errorf("starting background process: %w", err)
+	}
+
+	// The worker writes its own lock, but only once it has booted; write it
+	// here too so an agent or `slate wait` started immediately after doesn't
+	// read the gap as "workspace ready". Without the lock those callers race
+	// the worker, so a failed write stops the provision rather than exposing
+	// that state.
+	lockPath := filepath.Join(wsDir, ".slate", "provisioning")
+	if err := writeFileAtomic(lockPath, []byte(fmt.Sprintf("%d\n", cmd.Process.Pid))); err != nil {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		return fmt.Errorf("could not write the provisioning lock: %w\n\nProvisioning aborted; retry with `slate up %s`", err, name)
 	}
 
 	go func() {

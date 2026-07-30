@@ -45,6 +45,7 @@ This project uses slate: each workspace is a git worktree under .slate/workspace
 - Lifecycle: slate new <name> | slate up | slate down | slate rm -f <name> | slate ls
 - Run anything in the app container: slate exec -- <cmd> (no TTY, stdin forwarded; -s <service> for other containers)
 - App URL: https://<project>--<workspace>.test; logs: slate logs [service]
+- A workspace may still be provisioning in the background right after creation (SLATE_PROVISIONING=1 in this session's env means it started that way). slate exec and the tool shortcuts wait for it automatically; run slate wait to block until it's ready explicitly (instant when already up, non-zero exit + log tail if provisioning failed).
 `)
 
 	var toolNames []string
