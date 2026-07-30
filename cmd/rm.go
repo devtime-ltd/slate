@@ -33,10 +33,9 @@ func init() {
 	rootCmd.AddCommand(rmCmd)
 }
 
+// runRm has no hard docker requirement: bare workspaces exist without it,
+// and rm must still remove the worktree. Docker teardown is best-effort.
 func runRm(cmd *cobra.Command, args []string) error {
-	if err := requireDocker(); err != nil {
-		return err
-	}
 	name, err := resolveWorkspaceArg(args)
 	if err != nil {
 		return err
@@ -82,13 +81,26 @@ func runRm(cmd *cobra.Command, args []string) error {
 
 	killProvisioningLock(wsDir)
 
-	env, err := compose.NewEnv(name, wsDir, hostname)
-	if err != nil {
-		return err
+	// Only a bare workspace (never provisioned) may skip container teardown:
+	// silently proceeding for a provisioned one would orphan its containers
+	// and volumes behind a successful-looking rm.
+	bare := false
+	if _, err := os.Stat(unprovisionedMarker(wsDir)); err == nil {
+		bare = true
 	}
-
-	fmt.Printf("Destroying %s...\n", hostname)
-	compose.Run(env, "down", "-v", "--remove-orphans")
+	if requireDocker() == nil {
+		if env, err := compose.NewEnv(name, wsDir, hostname); err == nil {
+			fmt.Printf("Destroying %s...\n", hostname)
+			compose.Run(env, "down", "-v", "--remove-orphans")
+		} else if !bare {
+			// No compose env (entrypoint missing) but the workspace was
+			// provisioned: tear down by label instead of orphaning.
+			fmt.Printf("Destroying %s...\n", hostname)
+			compose.DownProject(compose.ProjectName(hostname), "-v", "--remove-orphans")
+		}
+	} else if !bare {
+		return fmt.Errorf("docker not found in PATH; it is needed to destroy %s's containers (only bare workspaces can be removed without it)", hostname)
+	}
 
 	proxy.UnregisterAll(hostname)
 

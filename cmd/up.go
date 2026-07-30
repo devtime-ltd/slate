@@ -58,7 +58,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
 			if answer == "" || answer == "y" {
-				return createWorkspace(args[0], "", upBg, cd, false)
+				return createWorkspace(args[0], "", upBg, cd, false, false)
 			}
 			return fmt.Errorf("workspace '%s' not found", args[0])
 		}
@@ -107,6 +107,17 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	opts := provisionOpts{fresh: upFresh, build: upBuild, wipe: upFresh}
 
+	// First provision of a bare workspace runs the fresh lifecycle: the
+	// volumes it's about to create are brand new. It is also the workspace's
+	// true first run, so the up hook gets SLATE_FRESH=1 and a [first-run,
+	// thereafter] agent pair picks the first-run variant. `--fresh` on an
+	// ordinary workspace deliberately doesn't: its agent session exists.
+	bareFirstUp := false
+	if _, err := os.Stat(unprovisionedMarker(wsDir)); err == nil {
+		opts.fresh = true
+		bareFirstUp = true
+	}
+
 	if upBg {
 		return runBackgroundProvision(cfg, name, wsDir, opts, cd, "")
 	}
@@ -116,7 +127,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	if cd {
-		return upAt(cfg, name, wsDir, false)
+		return upAt(cfg, name, wsDir, bareFirstUp)
 	}
 	return nil
 }

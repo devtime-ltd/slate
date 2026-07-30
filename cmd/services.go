@@ -130,6 +130,15 @@ func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg co
 		}
 	}
 
+	// Clear the bare marker the moment the lifecycle lands, not at the end:
+	// if a later step like proxy registration failed, a retry `slate up`
+	// would re-run the fresh lifecycle over data the user may have changed
+	// while debugging. Failing here matters too: while the marker survives,
+	// every plain `slate up` reruns the fresh wipe.
+	if err := os.Remove(unprovisionedMarker(wsDir)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("could not clear the unprovisioned marker: %w\n\nRemove %s manually; while it exists every `slate up` reruns the fresh lifecycle (database wipe)", err, unprovisionedMarker(wsDir))
+	}
+
 	// Restart worker services (app-like beyond the primary); they don't hot-reload.
 	if appLike := appLikeServices(env, cfg); len(appLike) > 1 {
 		for _, svc := range appLike[1:] {
