@@ -77,7 +77,7 @@ func statusLabel(isRunning bool) string {
 // rows the URL column shows the provision log path so the user has an
 // actionable next step inline.
 func provisioningRow(wsDir string) (string, string) {
-	logHint := dimStyle.Render("log: ") + filepath.Join(wsDir, ".slate", "provision.log")
+	logHint := dimStyle.Render("log: ") + provisionLogPath(wsDir)
 	pid, alive := readProvisioningLock(wsDir)
 	if pid > 0 && alive {
 		return yellowStyle.Render("provisioning"), logHint

@@ -54,6 +54,7 @@ Workspace lifecycle:
   slate restart [name] [service]  Restart workspace or single service
   slate rm [name]                 Destroy workspace (containers, volumes, worktree)
   slate ls [--all]                List workspaces (current project or all registered)
+  slate wait [name]               Block until a background provision finishes
 
 Tools:
   slate setup                     One-time host setup (proxy + DNS + CA cert + secret key)
@@ -88,7 +89,7 @@ Add `--project <name>` to any command to target a project other than the current
 ### Useful flags
 
 - `slate new <name> -b <branch>`: custom branch name (default: `slate/<name>`).
-- `slate new <name> --bg`: fork the slow phase (build + lifecycle) to the background; the fast phase (worktree + scaffold) runs inline so editing can start immediately. Progress is captured in `.slate/workspaces/<name>/.slate/provision.log` and surfaced as `provisioning` in `slate ls` (`failed` if it errors). While a bg provision is in flight, `slate up` and `slate restart` refuse to touch the workspace; `slate rm` aborts it as an escape hatch.
+- `slate new <name> --bg`: fork the slow phase (build + lifecycle) to the background; the fast phase (worktree + scaffold) runs inline so editing can start immediately. Progress is captured in `.slate/workspaces/<name>/.slate/provision.log` and surfaced as `provisioning` in `slate ls` (`failed` if it errors). While a bg provision is in flight, `slate up` and `slate restart` refuse to touch the workspace; `slate exec`, `slate shell`, and the scaffold tools wait for it instead of failing; `slate wait` blocks until it finishes (non-zero exit + log tail on failure); `slate rm` aborts it as an escape hatch.
 - `slate new <name> --cd` / `--cd=false`: opt in or out of dropping into a shell at the new workspace. Default comes from `auto_cd` in `~/.config/slate/config.yml` (default `true`), suppressed when stdio isn't an interactive terminal so scripts/CI/agents never block on a spawned shell. With `--bg` the shell is spawned immediately; without, after provisioning finishes.
 - `slate new <name> --adopt`: carry your uncommitted changes from the main checkout into the new worktree (tracked changes patched in, untracked files copied). The main checkout is left untouched.
 - `slate up [name] --fresh`: recreate containers + volumes (worktree code preserved) and run the new-workspace lifecycle.
@@ -218,7 +219,7 @@ up: slate agent
 
 `agent` is either a single command or a `[first-run, thereafter]` pair; the first-run variant is picked when `SLATE_FRESH=1`, which slate sets when `up` fires from a freshly provisioned `slate new`. With the pair above, every new workspace starts a claude session named `<project>--<workspace>` (resumable later with `claude --resume <name>`), and re-entry continues where you left off.
 
-Both commands run in the worktree via `sh -c` with `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` expanded and `SLATE_WORKSPACE`, `SLATE_PROJECT`, `SLATE_FRESH` in the environment. `slate agent` with no `agent:` configured is an error. `up` can be anything:
+Both commands run in the worktree via `sh -c` with `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` expanded and `SLATE_WORKSPACE`, `SLATE_PROJECT`, `SLATE_FRESH`, `SLATE_PROVISIONING` in the environment. `slate agent` with no `agent:` configured is an error. `up` can be anything:
 
 ```yaml
 # a session that survives your terminal app and allows multiple attachments
@@ -235,6 +236,7 @@ Slate is designed to be driven by an LLM running on the host:
 
 - Every command honours `SLATE_WORKSPACE=<name>`, so agents never depend on a cwd or an interactive picker.
 - Non-interactive contexts fail fast with instructions instead of prompting (`slate up missing-ws` errors rather than asking to create; `slate exec` runs without a TTY and forwards stdin).
+- Container commands self-synchronise with background provisioning: `slate exec` and the scaffold tools wait for an in-flight provision, and `slate wait` makes the check explicit.
 - `slate brief` prints a project-aware markdown cheatsheet (workspace targeting, tools, URLs, the container test-database gotcha) for pasting into your `CLAUDE.md`/`AGENTS.md`.
 
 ## Scaffolds

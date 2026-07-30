@@ -38,3 +38,30 @@ func TestWorkspaceConfigNote(t *testing.T) {
 		t.Errorf("note should say the workspace config is in use, got %q", note)
 	}
 }
+
+func TestProvisioningLockCleanupTombstone(t *testing.T) {
+	wsDir := t.TempDir()
+	slateDir := filepath.Join(wsDir, ".slate")
+	if err := os.MkdirAll(slateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := writeProvisioningLock(wsDir)
+
+	// deny dir writes so the lock can't be unlinked, only rewritten in place
+	if err := os.Chmod(slateDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(slateDir, 0o755) })
+
+	cleanup(nil)
+	if pid, alive := readProvisioningLock(wsDir); pid != 0 || alive {
+		t.Errorf("tombstoned lock should read as no lock, got pid=%d alive=%v", pid, alive)
+	}
+	data, err := os.ReadFile(filepath.Join(slateDir, "provisioning"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(data)) != "0" {
+		t.Errorf("want pid-0 tombstone, got %q", data)
+	}
+}

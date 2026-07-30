@@ -78,6 +78,10 @@ func runHostCommand(cfg config.ProjectConfig, command, wsName, wsDir string, fre
 	if fresh {
 		freshEnv = "1"
 	}
+	provisioningEnv := "0"
+	if _, alive := readProvisioningLock(wsDir); alive {
+		provisioningEnv = "1"
+	}
 	c := exec.Command("sh", "-c", expanded)
 	c.Dir = wsDir
 	c.Stdin = os.Stdin
@@ -87,6 +91,7 @@ func runHostCommand(cfg config.ProjectConfig, command, wsName, wsDir string, fre
 		"SLATE_WORKSPACE="+wsName,
 		"SLATE_PROJECT="+project,
 		"SLATE_FRESH="+freshEnv,
+		"SLATE_PROVISIONING="+provisioningEnv,
 	)
 	if err := c.Run(); err != nil {
 		var ee *exec.ExitError

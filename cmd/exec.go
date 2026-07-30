@@ -23,6 +23,9 @@ var shellCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if err := awaitProvision(wsDir, 0); err != nil {
+			return err
+		}
 		hostname, err := resolveHostname(name)
 		if err != nil {
 			return err
@@ -62,6 +65,9 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wsName, wsDir, err := workspace.ResolveWorkspace()
 		if err != nil {
+			return err
+		}
+		if err := awaitProvision(wsDir, 0); err != nil {
 			return err
 		}
 		hostname, err := resolveHostname(wsName)
@@ -194,6 +200,9 @@ func registerExecCommand(name string, t config.ExecTool) {
 			if err != nil {
 				return err
 			}
+			if err := awaitProvision(wsDir, 0); err != nil {
+				return err
+			}
 			hostname, err := resolveHostname(wsName)
 			if err != nil {
 				return err
@@ -223,6 +232,9 @@ func registerDBCommand(name string, t config.DBTool) {
 	dbCmd.RunE = func(cmd *cobra.Command, args []string) error {
 		wsName, wsDir, err := resolveNameOrCwd(args)
 		if err != nil {
+			return err
+		}
+		if err := awaitProvision(wsDir, 0); err != nil {
 			return err
 		}
 		projectName, err := resolveProject()

@@ -156,8 +156,7 @@ func checkNotProvisioning(wsDir string) error {
 	if !alive {
 		return nil
 	}
-	logPath := filepath.Join(wsDir, ".slate", "provision.log")
-	return fmt.Errorf("provisioning in flight (pid %d). Wait for it to finish, or `slate rm` to abort.\nLog: %s", pid, logPath)
+	return fmt.Errorf("provisioning in flight (pid %d). `slate wait` blocks until it finishes; `slate rm` aborts it.\nLog: %s", pid, provisionLogPath(wsDir))
 }
 
 // killProvisioningLock signals SIGTERM to a live bg provisioner and removes
@@ -197,7 +196,9 @@ func writeProvisioningLock(wsDir string) func(error) {
 	if err := os.Remove(failPath); err != nil && !os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "  warning: could not clear stale .failed marker: %v\n", err)
 	}
-	if err := os.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
+	// Publish via rename: WriteFile truncates in place, and a reader hitting
+	// that window would see an empty lock and treat mid-provision as ready.
+	if err := writeFileAtomic(lockPath, []byte(fmt.Sprintf("%d\n", os.Getpid()))); err != nil {
 		fmt.Fprintf(os.Stderr, "  warning: could not write provisioning lock: %v\n", err)
 	}
 	return func(retErr error) {
@@ -205,12 +206,51 @@ func writeProvisioningLock(wsDir string) func(error) {
 			if err := os.Rename(lockPath, failPath); err != nil {
 				fmt.Fprintf(os.Stderr, "  warning: could not mark provisioning as failed: %v\n", err)
 			}
-		} else {
-			if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
-				fmt.Fprintf(os.Stderr, "  warning: could not remove provisioning lock: %v\n", err)
-			}
+			return
 		}
+		err := os.Remove(lockPath)
+		if err == nil || os.IsNotExist(err) {
+			return
+		}
+		// An unremovable lock (dir-permission oddities) would read as
+		// "provisioner died" forever and block exec/wait after a successful
+		// provision. In-place file writes can still work when unlink doesn't,
+		// and readers treat a pid-0 lock as no lock. O_NOFOLLOW: the worktree
+		// is container-writable, and this fallback must not become a write
+		// primitive through a planted symlink.
+		f, oerr := os.OpenFile(lockPath, os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o644)
+		if oerr != nil {
+			fmt.Fprintf(os.Stderr, "  warning: could not remove provisioning lock: %v\n", err)
+			return
+		}
+		if _, werr := f.Write([]byte("0\n")); werr != nil {
+			fmt.Fprintf(os.Stderr, "  warning: could not remove provisioning lock: %v\n", err)
+		}
+		f.Close()
 	}
+}
+
+// writeFileAtomic publishes content via a temp file + rename so concurrent
+// readers never observe a truncated half-write. The temp name is unique per
+// writer: the bg parent and its worker both publish the lock, and a shared
+// temp path would let one writer's rename steal the other's file.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // appLikeServices: static for built-in scaffolds, compose-derived for inline
