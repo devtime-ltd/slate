@@ -32,9 +32,12 @@ Returns immediately when nothing is in flight.`,
 			return err
 		}
 		// Unlike the exec-path gate, an explicit wait also reports a provision
-		// that already failed before we were called.
+		// that already failed before we were called, or that never ran (--bare).
 		if _, err := os.Stat(filepath.Join(wsDir, ".slate", "provisioning.failed")); err == nil {
 			return provisionEndedErr(wsDir, "provisioning failed")
+		}
+		if _, err := os.Stat(unprovisionedMarker(wsDir)); err == nil {
+			return fmt.Errorf("workspace was created bare and has no containers yet; provision with `slate up %s`", name)
 		}
 		fmt.Println(tick() + " " + name + " ready")
 		return nil
@@ -86,6 +89,12 @@ func awaitProvision(wsDir string, timeout time.Duration) error {
 
 func provisionLogPath(wsDir string) string {
 	return filepath.Join(wsDir, ".slate", "provision.log")
+}
+
+// unprovisionedMarker is written by `slate new --bare` and removed by the
+// first successful lifecycle run.
+func unprovisionedMarker(wsDir string) string {
+	return filepath.Join(wsDir, ".slate", "unprovisioned")
 }
 
 // provisionEndedErr describes a provision that ended badly, with the log tail

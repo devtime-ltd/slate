@@ -45,9 +45,8 @@ var (
 )
 
 func runLs(cmd *cobra.Command, args []string) error {
-	if err := requireDocker(); err != nil {
-		return err
-	}
+	// No docker requirement: bare workspaces exist without it, and the
+	// compose probe below already degrades to "nothing running".
 	running := map[string]bool{}
 	if composeOut, err := exec.Command("docker", "compose", "ls", "--format", "json").Output(); err == nil {
 		var projects []composeProject
@@ -72,10 +71,11 @@ func statusLabel(isRunning bool) string {
 	return yellowStyle.Render("stopped")
 }
 
-// provisioningRow returns (statusLabel, urlOrLogPath) when the workspace is
-// currently provisioning or has failed, and ("", "") otherwise. For failed
-// rows the URL column shows the provision log path so the user has an
-// actionable next step inline.
+// provisioningRow returns (statusLabel, urlOrHint) when the workspace is
+// currently provisioning, has failed, or was created bare, and ("", "")
+// otherwise. For failed rows the URL column shows the provision log path,
+// for bare rows the up command, so the user has an actionable next step
+// inline.
 func provisioningRow(wsDir string) (string, string) {
 	logHint := dimStyle.Render("log: ") + provisionLogPath(wsDir)
 	pid, alive := readProvisioningLock(wsDir)
@@ -87,6 +87,9 @@ func provisioningRow(wsDir string) (string, string) {
 	}
 	if _, err := os.Stat(filepath.Join(wsDir, ".slate", "provisioning.failed")); err == nil {
 		return redStyle.Render("failed"), logHint
+	}
+	if _, err := os.Stat(unprovisionedMarker(wsDir)); err == nil {
+		return yellowStyle.Render("bare"), dimStyle.Render("provision: ") + "slate up " + filepath.Base(wsDir)
 	}
 	return "", ""
 }
