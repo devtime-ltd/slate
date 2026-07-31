@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,6 +33,13 @@ func resolveWorkspaceArg(args []string) (string, error) {
 type workspaceChoice struct {
 	name      string
 	isRunning bool
+}
+
+func statusLabel(isRunning bool) string {
+	if isRunning {
+		return greenStyle.Render("running")
+	}
+	return dimStyle.Render("stopped")
 }
 
 func pickWorkspace() (string, error) {
@@ -116,16 +122,8 @@ func listWorkspaceChoices() ([]workspaceChoice, error) {
 
 func runningComposeProjects() map[string]bool {
 	running := map[string]bool{}
-	out, err := exec.Command("docker", "compose", "ls", "--format", "json").Output()
-	if err != nil {
-		return running
-	}
-	var projects []composeProject
-	if err := json.Unmarshal(out, &projects); err != nil {
-		return running
-	}
-	for _, p := range projects {
-		running[p.Name] = true
+	for name := range runningComposePorts() {
+		running[name] = true
 	}
 	return running
 }

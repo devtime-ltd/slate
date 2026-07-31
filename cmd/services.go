@@ -298,10 +298,31 @@ func buildServicePorts(env compose.Env, cfg config.ProjectConfig) proxy.ServiceP
 	return services
 }
 
-// workspaceURLBlock returns the main URL with sub-URLs (vite, mailpit, mysql, postgres)
-// indented underneath. Used by ls and the new/up/restart success messages.
+// workspaceURLBlock is the block form (main URL, indented sub-URLs) printed
+// by the new/up/restart success messages.
 func workspaceURLBlock(env compose.Env, hostname string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) string {
-	out := globalCfg.WorkspaceURL(hostname)
+	portFor := func(service string, containerPort int) string {
+		port, err := compose.Port(env, service, containerPort)
+		if err != nil {
+			return ""
+		}
+		return port
+	}
+	main, subs := workspaceURLs(portFor, hostname, cfg, globalCfg)
+	out := main
+	for _, sub := range subs {
+		out += "\n  " + sub
+	}
+	return out
+}
+
+// workspaceURLs returns the styled main URL and unindented sub-service
+// lines (vite, mailpit, mysql, postgres); callers control placement.
+// portFor resolves a service's published host port ("" when absent) — ls
+// feeds it from one docker ps snapshot, up/restart from compose.Port.
+func workspaceURLs(portFor func(service string, containerPort int) string, hostname string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) (string, []string) {
+	main := urlStyle.Render(globalCfg.WorkspaceURL(hostname))
+	var lines []string
 
 	if def := cfg.Scaffold.Inline; def != nil {
 		var subs []string
@@ -313,25 +334,29 @@ func workspaceURLBlock(env compose.Env, hostname string, cfg config.ProjectConfi
 		sort.Strings(subs)
 		for _, sub := range subs {
 			d := def.Subdomains[sub]
-			if port, err := compose.Port(env, d.Service, d.Port); err == nil && port != "" {
-				out += "\n" + dimStyle.Render("  ↳ "+sub+": ") + globalCfg.ServiceURL(sub, hostname)
+			if portFor(d.Service, d.Port) != "" {
+				lines = append(lines, subURLLine(sub, globalCfg.ServiceURL(sub, hostname)))
 			}
 		}
-		return out
+		return main, lines
 	}
 
-	if vitePort, err := compose.Port(env, "vite", cfg.VitePort); err == nil && vitePort != "" {
-		out += "\n" + dimStyle.Render("  ↳ vite: ") + globalCfg.ServiceURL("vite", hostname)
+	if portFor("vite", cfg.VitePort) != "" {
+		lines = append(lines, subURLLine("vite", globalCfg.ServiceURL("vite", hostname)))
 	}
-	if _, err := compose.Port(env, "mailpit", 8025); err == nil {
-		out += "\n" + dimStyle.Render("  ↳ mailpit: ") + globalCfg.ServiceURL("mailpit", hostname)
+	if portFor("mailpit", 8025) != "" {
+		lines = append(lines, subURLLine("mailpit", globalCfg.ServiceURL("mailpit", hostname)))
 	}
-	if mysqlPort, err := compose.Port(env, "mysql", 3306); err == nil && mysqlPort != "" {
-		out += "\n" + dimStyle.Render("  ↳ mysql: ") + fmt.Sprintf("%s.test:%s", hostname, mysqlPort)
+	if mysqlPort := portFor("mysql", 3306); mysqlPort != "" {
+		lines = append(lines, subURLLine("mysql", fmt.Sprintf("%s.test:%s", hostname, mysqlPort)))
 	}
-	if pgPort, err := compose.Port(env, "postgres", 5432); err == nil && pgPort != "" {
-		out += "\n" + dimStyle.Render("  ↳ postgres: ") + fmt.Sprintf("%s.test:%s", hostname, pgPort)
+	if pgPort := portFor("postgres", 5432); pgPort != "" {
+		lines = append(lines, subURLLine("postgres", fmt.Sprintf("%s.test:%s", hostname, pgPort)))
 	}
 
-	return out
+	return main, lines
+}
+
+func subURLLine(label, url string) string {
+	return dimStyle.Render("↳ "+label+": ") + fadedStyle.Render(url)
 }
