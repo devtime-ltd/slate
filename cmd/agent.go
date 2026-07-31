@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/devtime-ltd/slate/internal/config"
@@ -17,8 +18,9 @@ var agentCmd = &cobra.Command{
 	Short: "Run the project's agent command in a workspace",
 	Long: `Runs the "agent:" command from the main checkout's slate.yml in the
 workspace directory. Configure a single command, or a [first-run, thereafter]
-pair; the first-run variant is picked when SLATE_FRESH=1 (set by the up
-hook after slate new provisions a workspace).
+pair; the first-run variant is picked on the workspace's first agent entry
+(tracked via .slate/agent-started), whether that entry comes through the up
+hook (SLATE_FRESH=1) or directly in a bare workspace.
 
 Placeholders expanded: {{WORKSPACE}}, {{PROJECT}}, {{HOSTNAME}}.`,
 	GroupID: "tools",
@@ -40,8 +42,29 @@ Placeholders expanded: {{WORKSPACE}}, {{PROJECT}}, {{HOSTNAME}}.`,
 		if cfg.Agent.IsZero() {
 			return errors.New("no `agent:` in slate.yml; set a command (e.g. `agent: claude`) or a [first-run, thereafter] pair")
 		}
-		return runAgent(cfg, name, wsDir, os.Getenv("SLATE_FRESH") == "1")
+		return runAgent(cfg, name, wsDir, agentFresh(wsDir))
 	},
+}
+
+func agentStartedMarker(wsDir string) string {
+	return filepath.Join(wsDir, ".slate", "agent-started")
+}
+
+// agentFresh decides whether this is the workspace's first agent entry.
+// The agent-started marker is the source of truth once it exists: it stops
+// a bare workspace's later `slate up` (which sets SLATE_FRESH=1) from
+// re-running the first-run variant over a live session. Without a marker,
+// SLATE_FRESH=1 (up hook) or a bare workspace means first entry; existing
+// pre-marker workspaces fall through to the thereafter variant as before.
+func agentFresh(wsDir string) bool {
+	if _, err := os.Stat(agentStartedMarker(wsDir)); err == nil {
+		return false
+	}
+	if os.Getenv("SLATE_FRESH") == "1" {
+		return true
+	}
+	_, err := os.Stat(unprovisionedMarker(wsDir))
+	return err == nil
 }
 
 func init() {
@@ -53,7 +76,11 @@ func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool) error 
 	if fresh {
 		command = cfg.Agent.First
 	}
-	return runHostCommand(cfg, command, wsName, wsDir, fresh)
+	err := runHostCommand(cfg, command, wsName, wsDir, fresh)
+	if err == nil {
+		_ = os.WriteFile(agentStartedMarker(wsDir), nil, 0o644)
+	}
+	return err
 }
 
 func expandCommand(command, wsName, project string) string {
