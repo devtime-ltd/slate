@@ -42,6 +42,15 @@ func Register(hostname string, services ServicePorts) error {
 		return fmt.Errorf("HTTPS proxy not running. Run `slate proxy start` or `slate setup`")
 	}
 
+	// A proxy container that restarted outside slate's control (host reboot,
+	// docker restart) boots from the bare Caddyfile and loses the API-loaded
+	// server config, so every registration would 500. Rebuild it first.
+	if !serverExists() {
+		if err := EnsureServer(detectTLS()); err != nil {
+			return fmt.Errorf("proxy server config missing and could not be rebuilt: %w", err)
+		}
+	}
+
 	// Drop everything the workspace previously registered, so subdomains
 	// removed or renamed since the last up don't linger.
 	deleteWorkspaceRoutes(hostname)
@@ -130,6 +139,103 @@ func deleteRoutesWhere(match func(id, host string) bool) {
 	}
 }
 
+func serverExists() bool {
+	resp, err := caddyClient.Get("http://127.0.0.1:2019/config/apps/http/servers/slate")
+	if err != nil {
+		return false
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return resp.StatusCode < 400
+}
+
+// detectTLS infers the proxy's TLS mode from the running config. Only called
+// when the server node is missing, i.e. on a Caddyfile-boot config, where the
+// TLS-mode Caddyfile (`local_certs`) yields an apps.tls node and the no-TLS
+// one (`auto_https off`) doesn't.
+func detectTLS() bool {
+	resp, err := caddyClient.Get("http://127.0.0.1:2019/config/apps/tls")
+	if err != nil {
+		return false
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return resp.StatusCode < 400
+}
+
+func expectedListen(tls bool) []string {
+	if tls {
+		return []string{":80", ":443"}
+	}
+	return []string{":80"}
+}
+
+// EnsureServer makes sure the running config contains the `slate` server with
+// the expected listeners, loading the full base config when it doesn't. When
+// the server already matches, the running config (and every registered route
+// in it) is left untouched.
+func EnsureServer(tls bool) error {
+	if listen, ok := serverListen(); ok && sameStrings(listen, expectedListen(tls)) {
+		return nil
+	}
+
+	listenJSON, _ := json.Marshal(expectedListen(tls))
+	cfg := fmt.Sprintf(`{
+		"admin": {"listen": "0.0.0.0:2019"},
+		"apps": {
+			"http": {
+				"servers": {
+					"slate": {"listen": %s, "routes": []}
+				}
+			},
+			"tls": {
+				"automation": {
+					"policies": [{"issuers": [{"module": "internal"}]}]
+				}
+			}
+		}
+	}`, listenJSON)
+
+	resp, err := caddyClient.Post("http://127.0.0.1:2019/load", "application/json", strings.NewReader(cfg))
+	if err != nil {
+		return fmt.Errorf("caddy API: %w", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("caddy API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func serverListen() (listen []string, ok bool) {
+	resp, err := caddyClient.Get("http://127.0.0.1:2019/config/apps/http/servers/slate/listen")
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		io.Copy(io.Discard, resp.Body)
+		return nil, false
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&listen); err != nil {
+		return nil, false
+	}
+	return listen, true
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func caddyAddRoute(id, host, port string) error {
 	upstream := "host.docker.internal:" + port
 
@@ -148,10 +254,10 @@ func caddyAddRoute(id, host, port string) error {
 	if err != nil {
 		return fmt.Errorf("caddy API: %w", err)
 	}
-	io.Copy(io.Discard, resp.Body)
+	respBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("caddy API returned %d", resp.StatusCode)
+		return fmt.Errorf("caddy API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil
 }
