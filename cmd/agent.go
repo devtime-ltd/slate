@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -76,11 +77,79 @@ func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool) error 
 	if fresh {
 		command = cfg.Agent.First
 	}
-	err := runHostCommand(cfg, command, wsName, wsDir, fresh)
+	err := runHostCommand(cfg, command, wsName, wsDir, fresh, "SLATE_AGENT=1")
 	if err == nil {
 		_ = os.WriteFile(agentStartedMarker(wsDir), nil, 0o644)
+		offerTeardownOnExit(wsName, wsDir)
 	}
 	return err
+}
+
+// offerTeardownOnExit runs after an agent session ends. It speaks only when
+// there is something worth saying: a teardown staged from inside the session
+// (via `slate done`), or work that provably landed. Mid-work exits stay
+// silent, and nothing is destroyed without a human saying so - except a
+// staged teardown, which the human already asked for in-session. A declined
+// offer is remembered per tip so re-entering the session doesn't nag.
+func offerTeardownOnExit(wsName, wsDir string) {
+	mainRoot, err := workspace.MainRoot()
+	if err != nil {
+		return
+	}
+	ev := checkLanded(mainRoot, wsDir)
+
+	// A staged marker only counts for the tip it was staged at: a marker
+	// left behind by an earlier incarnation of this workspace name, or
+	// staged before further commits, must not authorise destroying the
+	// current state.
+	staged, stale := false, false
+	if raw, err := os.ReadFile(stagedTeardownMarker(wsDir)); err == nil {
+		if strings.TrimSpace(string(raw)) == ev.tip && ev.tip != "" {
+			staged = true
+		} else {
+			stale = true
+			_ = os.Remove(stagedTeardownMarker(wsDir))
+		}
+	}
+
+	interactive := isInteractiveTerminal()
+	hostname, err := resolveHostname(wsName)
+	if err != nil {
+		return
+	}
+
+	switch {
+	case staged && ev.ok:
+		fmt.Printf("Teardown was staged in this session (%s).\n", ev.evidence)
+		if err := destroyWorkspace(wsName, wsDir, hostname, false, ev.branchOverride(), false, &ev); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: staged teardown failed: %v\n", err)
+		}
+	case staged:
+		// The workspace changed between staging and exit; don't destroy
+		// work on the strength of a stale request.
+		_ = os.Remove(stagedTeardownMarker(wsDir))
+		fmt.Printf("Teardown was staged in this session, but %s is no longer safe to remove:\n", wsName)
+		for _, r := range ev.reasons {
+			fmt.Printf("  - %s\n", r)
+		}
+		fmt.Println("Staging cleared; run `slate done` again once the work has landed.")
+	case stale:
+		fmt.Printf("A staged teardown for %s no longer matches the workspace's state; staging cleared - run `slate done` again once ready.\n", wsName)
+	case ev.ok && ev.hasWork && interactive:
+		if declined, _ := os.ReadFile(teardownDeclinedMarker(wsDir)); strings.TrimSpace(string(declined)) == ev.tip {
+			return // already asked about exactly this state; don't nag
+		}
+		fmt.Printf("Work landed (%s). Tear down %s? [y/N] ", ev.evidence, wsName)
+		reader := bufio.NewReader(os.Stdin)
+		answer, _ := reader.ReadString('\n')
+		if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+			_ = createMarkerFile(teardownDeclinedMarker(wsDir), []byte(ev.tip+"\n"))
+			return
+		}
+		if err := destroyWorkspace(wsName, wsDir, hostname, false, ev.branchOverride(), false, &ev); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: teardown failed: %v\n", err)
+		}
+	}
 }
 
 func expandCommand(command, wsName, project string) string {
@@ -94,7 +163,7 @@ func expandCommand(command, wsName, project string) string {
 // runHostCommand executes a slate.yml host command via sh -c in the workspace
 // dir. Ordinary non-zero exits (ctrl-c, `exit 1`) aren't slate failures, but
 // 126 and 127 mean the command itself couldn't run and must be surfaced.
-func runHostCommand(cfg config.ProjectConfig, command, wsName, wsDir string, fresh bool) error {
+func runHostCommand(cfg config.ProjectConfig, command, wsName, wsDir string, fresh bool, extraEnv ...string) error {
 	project, err := workspace.ProjectName(cfg.Project)
 	if err != nil {
 		return err
@@ -120,6 +189,7 @@ func runHostCommand(cfg config.ProjectConfig, command, wsName, wsDir string, fre
 		"SLATE_FRESH="+freshEnv,
 		"SLATE_PROVISIONING="+provisioningEnv,
 	)
+	c.Env = append(c.Env, extraEnv...)
 	if err := c.Run(); err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
@@ -141,5 +211,5 @@ func upAt(cfg config.ProjectConfig, wsName, wsDir string, fresh bool) error {
 			fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
 		}
 	}
-	return spawnShellAt(wsDir)
+	return spawnShellUnlessFinished(wsDir)
 }

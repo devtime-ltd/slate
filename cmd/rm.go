@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/devtime-ltd/slate/internal/compose"
 	"github.com/devtime-ltd/slate/internal/proxy"
 	"github.com/devtime-ltd/slate/internal/workspace"
@@ -58,8 +59,6 @@ func runRm(cmd *cobra.Command, args []string) error {
 		return rmOrphaned(name, wsDir, hostname)
 	}
 
-	mainRoot, _ := workspace.MainRoot()
-	cwdInside := cwdIsInside(wsDir)
 	dirty, isDirty := dirtyWorktreeSummary(wsDir)
 
 	if isDirty && rmForce {
@@ -78,6 +77,24 @@ func runRm(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 	}
+
+	return destroyWorkspace(name, wsDir, hostname, rmKeepBranch, "", true, nil)
+}
+
+// destroyWorkspace tears down a workspace's containers, volumes, proxy
+// routes, worktree and (when safe) branch. Callers own any confirmation;
+// this only destroys. Shared by rm, done, and the agent exit hook.
+// A non-empty provenLanded is evidence (from checkLanded) that the branch's
+// work merged even where BranchSafety can't see it - rebase- and
+// squash-merges rewrite SHAs - and lets the branch be deleted anyway.
+// A non-nil verified re-verifies the worktree immediately before removal:
+// the evidence-gated callers checked it before the (slow) container and
+// proxy teardown, and anything written meanwhile - or a switch to a
+// different branch/tip than the one the evidence covered - must not be
+// force-removed on stale proof.
+func destroyWorkspace(name, wsDir, hostname string, keepBranch bool, provenLanded string, escapeCwd bool, verified *landedEvidence) error {
+	mainRoot, _ := workspace.MainRoot()
+	cwdInside := cwdIsInside(wsDir)
 
 	killProvisioningLock(wsDir)
 
@@ -104,6 +121,27 @@ func runRm(cmd *cobra.Command, args []string) error {
 
 	proxy.UnregisterAll(hostname)
 
+	// Last possible moment before the forced removal: container and proxy
+	// teardown above took real time, and anything written meanwhile - or a
+	// branch/tip swap that would invalidate the evidence - must abort.
+	if verified != nil {
+		summary, dirty, serr := worktreeStatus(wsDir)
+		branchNow, berr := gitIn(wsDir, "rev-parse", "--abbrev-ref", "HEAD")
+		tipNow, terr := gitIn(wsDir, "rev-parse", "HEAD")
+		var problem string
+		switch {
+		case serr != nil || berr != nil || terr != nil:
+			problem = "could not re-verify its state"
+		case dirty:
+			problem = "uncommitted changes appeared (" + summary + ")"
+		case branchNow != verified.branch || tipNow != verified.tip:
+			problem = "the checked-out branch or tip changed from what was verified"
+		}
+		if problem != "" {
+			return fmt.Errorf("aborting removal of %s: %s after verification; containers are stopped - `slate up` restores them, `slate rm` removes anyway", name, problem)
+		}
+	}
+
 	branch := workspace.WorktreeBranch(wsDir)
 	removeErr := workspace.RemoveWorktree(wsDir)
 	if removeErr != nil {
@@ -111,14 +149,32 @@ func runRm(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf(""+tick()+" %s removed\n", hostname)
-	if removeErr == nil && !rmKeepBranch {
-		cleanupBranch(mainRoot, branch)
+	if removeErr == nil {
+		_ = os.Remove(stagedTeardownMarker(wsDir))
+		_ = os.Remove(teardownDeclinedMarker(wsDir))
+		if !keepBranch {
+			cleanupBranch(mainRoot, branch, provenLanded)
+		}
 	}
 
 	if cwdInside && mainRoot != "" {
+		if !escapeCwd {
+			// The caller's cwd is not the user's shell (the agent exit hook
+			// runs with cwd pinned to the worktree); escapes here would act
+			// on the wrong process. A hint covers the case where the user's
+			// shell really was inside.
+			fmt.Printf("If your shell was inside the workspace, run `cd %s`.\n", mainRoot)
+			return nil
+		}
 		if insideSlateShell() {
 			fmt.Println("Your cwd was destroyed; exiting the slate shell.")
 			popSlateShell()
+			return nil
+		}
+		if !term.IsTerminal(os.Stdin.Fd()) {
+			// Non-interactive caller (an agent session, a script): a spawned
+			// shell would just read EOF. Point at the escape route instead.
+			fmt.Printf("Your cwd was destroyed; run `cd %s`.\n", mainRoot)
 			return nil
 		}
 		fmt.Printf("Your cwd was destroyed; dropping into a shell at %q (exit to return).\n", mainRoot)
@@ -177,17 +233,24 @@ func rmOrphaned(name, wsDir, hostname string) error {
 	}
 
 	fmt.Printf(""+tick()+" %s removed\n", hostname)
+	_ = os.Remove(stagedTeardownMarker(wsDir))
+	_ = os.Remove(teardownDeclinedMarker(wsDir))
 	if !rmKeepBranch {
-		cleanupBranch(mainRoot, branch)
+		cleanupBranch(mainRoot, branch, "")
 	}
 	return nil
 }
 
 // cleanupBranch deletes the workspace's branch when its commits are provably
-// recoverable (pushed or merged), otherwise says why it was kept.
-func cleanupBranch(mainRoot, branch string) {
+// recoverable (pushed or merged), otherwise says why it was kept. A non-empty
+// provenLanded overrides an unsafe verdict: the caller verified the merge in
+// a way BranchSafety can't (a merged PR after a rebase/squash rewrite).
+func cleanupBranch(mainRoot, branch, provenLanded string) {
 	if branch == "" || mainRoot == "" {
 		return
+	}
+	if branch == workspace.DefaultBranch(mainRoot) {
+		return // never the default branch, whatever the evidence claims
 	}
 	safe, reason := workspace.BranchSafety(mainRoot, branch)
 	if reason == "no such branch" {
@@ -195,6 +258,9 @@ func cleanupBranch(mainRoot, branch string) {
 	}
 	if workspace.CheckedOutBranches()[branch] {
 		return // in use by another worktree; not this workspace's to delete
+	}
+	if !safe && provenLanded != "" {
+		safe, reason = true, provenLanded
 	}
 	if !safe {
 		fmt.Printf("  kept branch %s (%s); delete with `git branch -D %s`\n", branch, reason, branch)
@@ -241,19 +307,27 @@ func cwdIsInside(dir string) bool {
 }
 
 // dirtyWorktreeSummary returns a short summary like "3 modified, 1 untracked"
-// and a bool for whether the worktree has any uncommitted changes. Empty
-// string + false means clean (or git failed; we treat that as clean rather
-// than blocking destruction).
+// and a bool for whether the worktree has any uncommitted changes. A git
+// failure reads as clean: rm's flow warns and confirms with a human, so
+// failing open is acceptable there. checkLanded must NOT use this - it
+// feeds promptless destruction and uses worktreeStatus instead.
 func dirtyWorktreeSummary(wsDir string) (string, bool) {
+	summary, dirty, _ := worktreeStatus(wsDir)
+	return summary, dirty
+}
+
+// worktreeStatus is the error-honest variant: err!=nil means git could not
+// answer, and the worktree must not be presumed clean.
+func worktreeStatus(wsDir string) (string, bool, error) {
 	c := exec.Command("git", "status", "--porcelain")
 	c.Dir = wsDir
 	out, err := c.Output()
 	if err != nil {
-		return "", false
+		return "", false, fmt.Errorf("git status failed in %s: %v", wsDir, err)
 	}
 	body := strings.TrimSpace(string(out))
 	if body == "" {
-		return "", false
+		return "", false, nil
 	}
 	var modified, untracked int
 	for _, line := range strings.Split(body, "\n") {
@@ -274,7 +348,7 @@ func dirtyWorktreeSummary(wsDir string) (string, bool) {
 		}
 	}
 	if modified == 0 && untracked == 0 {
-		return "", false
+		return "", false, nil
 	}
 	var parts []string
 	if modified > 0 {
@@ -283,5 +357,5 @@ func dirtyWorktreeSummary(wsDir string) (string, bool) {
 	if untracked > 0 {
 		parts = append(parts, fmt.Sprintf("%d untracked", untracked))
 	}
-	return strings.Join(parts, ", "), true
+	return strings.Join(parts, ", "), true, nil
 }

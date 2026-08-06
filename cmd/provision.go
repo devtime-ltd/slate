@@ -100,7 +100,7 @@ func runBackgroundProvision(cfg config.ProjectConfig, name, wsDir string, opts p
 		if err := runHostCommand(cfg, newHook, name, wsDir, opts.fresh); err != nil {
 			fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
 		}
-		return spawnShellAt(wsDir)
+		return spawnShellUnlessFinished(wsDir)
 	}
 	if !cfg.Agent.IsZero() {
 		fmt.Println("Run `slate agent` once provisioning completes.")
@@ -173,6 +173,17 @@ func detachProvision(name, wsDir string, opts provisionOpts) error {
 	fmt.Printf("Provisioning in background (log: %s).\n", logPath)
 	fmt.Println("Run `tail -f " + logPath + "` to follow.")
 	return nil
+}
+
+// spawnShellUnlessFinished is spawnShellAt for the hook-return path: the
+// new:/up: hook may have finished the workspace (a staged `slate done` or
+// the exit-hook offer), in which case the directory to shell into no longer
+// exists and there is nothing left to do.
+func spawnShellUnlessFinished(dir string) error {
+	if _, err := os.Stat(dir); err != nil {
+		return nil
+	}
+	return spawnShellAt(dir)
 }
 
 // spawnShellAt runs $SHELL with cwd set to dir. Non-zero shell exits (e.g.
