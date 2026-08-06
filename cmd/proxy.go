@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devtime-ltd/slate/internal/config"
+	"github.com/devtime-ltd/slate/internal/proxy"
 	"github.com/spf13/cobra"
 )
 
@@ -142,10 +143,13 @@ func runProxyStart(cmd *cobra.Command, args []string) error {
 	if useTLS {
 		runArgs = append(runArgs, "-p", fmt.Sprintf("%d:443", httpsPort))
 	}
+	// --resume makes caddy prefer its autosaved config (persisted in the
+	// slate-proxy-config volume) over the seed Caddyfile, so API-registered
+	// routes survive container restarts and host reboots.
 	runArgs = append(runArgs,
 		proxyImage,
 		"sh", "-c",
-		fmt.Sprintf(`echo '%s' > /etc/caddy/Caddyfile && caddy run --config /etc/caddy/Caddyfile --adapter caddyfile`, caddyfile),
+		fmt.Sprintf(`echo '%s' > /etc/caddy/Caddyfile && caddy run --resume --config /etc/caddy/Caddyfile --adapter caddyfile`, caddyfile),
 	)
 
 	dockerCmd := exec.Command("docker", runArgs...)
@@ -161,7 +165,9 @@ func runProxyStart(cmd *cobra.Command, args []string) error {
 		time.Sleep(500 * time.Millisecond)
 		if isProxyAPIReady() {
 			fmt.Println(" ready.")
-			initProxyServer(useTLS)
+			if err := proxy.EnsureServer(useTLS); err != nil {
+				fmt.Printf("  warning: could not initialize proxy config: %v\n", err)
+			}
 
 			if useTLS {
 				fmt.Printf("\n"+tick()+" Proxy running (HTTP %d, HTTPS %d)\n", httpPort, httpsPort)
@@ -252,45 +258,6 @@ func runProxyTrust(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("" + tick() + " CA certificate trusted. HTTPS will work for all *.test domains.")
 	return nil
-}
-
-func initProxyServer(tls bool) {
-	listenJSON := `[":80"]`
-	if tls {
-		listenJSON = `[":80", ":443"]`
-	}
-
-	cfg := fmt.Sprintf(`{
-		"admin": {
-			"listen": "0.0.0.0:2019"
-		},
-		"apps": {
-			"http": {
-				"servers": {
-					"slate": {
-						"listen": %s,
-						"routes": []
-					}
-				}
-			},
-			"tls": {
-				"automation": {
-					"policies": [{
-						"issuers": [{"module": "internal"}]
-					}]
-				}
-			}
-		}
-	}`, listenJSON)
-
-	req, _ := http.NewRequest("POST", "http://127.0.0.1:2019/load", strings.NewReader(cfg))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		fmt.Printf("  warning: could not initialize proxy config: %v\n", err)
-		return
-	}
-	resp.Body.Close()
 }
 
 // loadProxyConfig builds a config.GlobalConfig with detected proxy ports.
