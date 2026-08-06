@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/devtime-ltd/slate/internal/compose"
 	"github.com/devtime-ltd/slate/internal/config"
@@ -39,7 +41,36 @@ func init() {
 }
 
 func runNew(cmd *cobra.Command, args []string) error {
-	return createWorkspace(args[0], newBranch, newBg, resolveAutoCd(cmd, "cd", newCd), newAdopt, newBare)
+	name := args[0]
+	if err := workspace.ValidateName(name); err != nil {
+		var rescueErr error
+		name, rescueErr = offerShorterName(name, err)
+		if rescueErr != nil {
+			return rescueErr
+		}
+	}
+	return createWorkspace(name, newBranch, newBg, resolveAutoCd(cmd, "cd", newCd), newAdopt, newBare)
+}
+
+// offerShorterName rescues the one fixable validation failure, a too-long
+// name, by offering a whole-word truncation. One try only: a non-y answer
+// returns the original error. Non-interactive callers get the suggestion
+// appended to the error instead of a prompt.
+func offerShorterName(name string, verr error) (string, error) {
+	suggestion := workspace.ShortenName(name)
+	if suggestion == "" {
+		return "", verr
+	}
+	if !isInteractiveTerminal() {
+		return "", fmt.Errorf("%w; try `slate new %s`", verr, suggestion)
+	}
+	fmt.Printf("Name is too long (%d chars, max %d). Use '%s' instead? [y/N] ", len(name), workspace.MaxNameLen, suggestion)
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+		return "", verr
+	}
+	return suggestion, nil
 }
 
 func createWorkspace(name, branch string, bg, cd, adopt, bare bool) error {
@@ -82,6 +113,10 @@ func createWorkspace(name, branch string, bg, cd, adopt, bare bool) error {
 	if _, err := os.Stat(wsDir); err == nil {
 		return fmt.Errorf("workspace '%s' already exists at %s\nResume it with `slate up %s`, or free the name with `slate rm %s` first", name, wsDir, name, name)
 	}
+	// A reused name must not inherit teardown markers from a prior
+	// incarnation that was removed outside slate rm.
+	_ = os.Remove(stagedTeardownMarker(wsDir))
+	_ = os.Remove(teardownDeclinedMarker(wsDir))
 
 	wsRoot, err := workspace.WorkspacesRoot()
 	if err != nil {

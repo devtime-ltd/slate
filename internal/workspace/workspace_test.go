@@ -40,6 +40,28 @@ func TestValidateName(t *testing.T) {
 	}
 }
 
+func TestShortenName(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+		desc string
+	}{
+		{"festival-submission-listings-losing-filter-on-pagination", "festival-submission-listings", "cut mid-word drops the fragment"},
+		{"abcdefghijklmnopqrstuvwxyz-abcde-xyz", "abcdefghijklmnopqrstuvwxyz-abcde", "cut lands exactly before a dash: kept whole"},
+		{"abcdefghijklmnopqrstuvwxyzabcde-xyz", "abcdefghijklmnopqrstuvwxyzabcde", "cut ends on a dash: dash trimmed"},
+		{"abcdefghijklmnopqrstuvwxyz1234567890", "abcdefghijklmnopqrstuvwxyz123456", "no dashes: raw truncation"},
+		{"short-name", "", "not over-long"},
+		{"ABCDEFGHIJKLMNOPQRSTUVWXYZ-ABCDEF-XYZ", "", "invalid beyond length: no suggestion"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			if got := ShortenName(tt.name); got != tt.want {
+				t.Errorf("ShortenName(%q) = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveWorkspace(t *testing.T) {
 	tmp := t.TempDir()
 	SetMainRootOverride(tmp)
