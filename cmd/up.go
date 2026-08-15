@@ -17,6 +17,7 @@ var upBuild bool
 var upFresh bool
 var upBg bool
 var upCd bool
+var upHooks bool
 
 var upCmd = &cobra.Command{
 	Use:   "up [name]",
@@ -31,6 +32,7 @@ func init() {
 	upCmd.Flags().BoolVar(&upFresh, "fresh", false, "Recreate containers + volumes (worktree code preserved)")
 	upCmd.Flags().BoolVar(&upBg, "bg", false, "Run container build + lifecycle in the background")
 	upCmd.Flags().BoolVar(&upCd, "cd", false, "Spawn a shell in the workspace directory (default from global auto_cd; pass --cd=false to opt out)")
+	upCmd.Flags().BoolVar(&upHooks, "hooks", false, "Run the up: hook (default: only at an interactive terminal, or with SLATE_HOOKS=1)")
 	upCmd.GroupID = "workspace"
 	rootCmd.AddCommand(upCmd)
 }
@@ -40,6 +42,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	cd := resolveAutoCd(cmd, "cd", upCd)
+	hooks := resolveHooks(cmd, "hooks", upHooks)
 	name, wsDir, err := resolveNameOrCwd(args)
 	if err == nil {
 		if err := checkNotProvisioning(wsDir); err != nil {
@@ -58,7 +61,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
 			if answer == "" || answer == "y" {
-				return createWorkspace(args[0], "", upBg, cd, false, false)
+				return createWorkspace(args[0], "", upBg, cd, hooks, false, false)
 			}
 			return fmt.Errorf("workspace '%s' not found", args[0])
 		}
@@ -119,17 +122,14 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	if upBg {
-		return runBackgroundProvision(cfg, name, wsDir, opts, cd, "")
+		return runBackgroundProvision(cfg, name, wsDir, opts, cd, hooks, "")
 	}
 
 	if err := runWorkspaceLifecycle(env, name, wsDir, hostname, cfg, proxyConfig, opts); err != nil {
 		return err
 	}
 
-	if cd {
-		return upAt(cfg, name, wsDir, bareFirstUp)
-	}
-	return nil
+	return upAt(cfg, name, wsDir, bareFirstUp, cd, hooks)
 }
 
 func resolveNameOrCwd(args []string) (string, string, error) {

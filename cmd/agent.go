@@ -15,7 +15,7 @@ import (
 )
 
 var agentCmd = &cobra.Command{
-	Use:   "agent [workspace]",
+	Use:   "agent [workspace] [-- args...]",
 	Short: "Run the project's agent command in a workspace",
 	Long: `Runs the "agent:" command from the main checkout's slate.yml in the
 workspace directory. Configure a single command, or a [first-run, thereafter]
@@ -23,11 +23,24 @@ pair; the first-run variant is picked on the workspace's first agent entry
 (tracked via .slate/agent-pending and .slate/agent-started), whether that
 entry comes through the up hook (SLATE_FRESH=1) or directly.
 
+Anything after -- is appended to the configured command, so a caller can add
+its own flags or a prompt without duplicating the command in slate.yml.
+
 Placeholders expanded: {{WORKSPACE}}, {{PROJECT}}, {{HOSTNAME}}.`,
 	GroupID: "tools",
-	Args:    cobra.MaximumNArgs(1),
+	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name, wsDir, err := resolveNameOrCwd(args)
+		target, extra := splitAtDash(cmd, args)
+		if len(target) > 1 {
+			return fmt.Errorf("accepts at most one workspace, got %d (put agent arguments after --)", len(target))
+		}
+		// Ahead of resolving the workspace, which may fall back to the
+		// interactive picker: without a terminal there is nothing to pick
+		// with, and nothing worth picking for.
+		if !isInteractiveTerminal() && !hooksOptIn() {
+			return errors.New("`slate agent` needs a terminal: the configured agent command is interactive and would exit immediately without one.\nRun it from a terminal or inside a tmux session, or set SLATE_HOOKS=1 to run it anyway")
+		}
+		name, wsDir, err := resolveNameOrCwd(target)
 		if err != nil {
 			return err
 		}
@@ -43,8 +56,18 @@ Placeholders expanded: {{WORKSPACE}}, {{PROJECT}}, {{HOSTNAME}}.`,
 		if cfg.Agent.IsZero() {
 			return errors.New("no `agent:` in slate.yml; set a command (e.g. `agent: claude`) or a [first-run, thereafter] pair")
 		}
-		return runAgent(cfg, name, wsDir, agentFresh(wsDir))
+		return runAgent(cfg, name, wsDir, agentFresh(wsDir), extra)
 	},
+}
+
+// splitAtDash separates the command's own arguments from everything after a
+// literal --, which is passed through to the configured agent command.
+func splitAtDash(cmd *cobra.Command, args []string) ([]string, []string) {
+	i := cmd.ArgsLenAtDash()
+	if i < 0 {
+		return args, nil
+	}
+	return args[:i], args[i:]
 }
 
 func agentStartedMarker(wsDir string) string {
@@ -83,12 +106,15 @@ func init() {
 	rootCmd.AddCommand(agentCmd)
 }
 
-func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool) error {
+func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool, extraArgs []string) error {
 	command := cfg.Agent.Again
 	if fresh {
 		command = cfg.Agent.First
 	}
-	err := runHostCommand(cfg, command, wsName, wsDir, fresh, "SLATE_AGENT=1")
+	err := runHostCommand(cfg, command, wsName, wsDir, fresh, hostCmdOpts{
+		args: extraArgs,
+		env:  []string{"SLATE_AGENT=1"},
+	})
 	if err == nil {
 		_ = os.WriteFile(agentStartedMarker(wsDir), nil, 0o644)
 		_ = os.Remove(agentPendingMarker(wsDir))
@@ -172,15 +198,52 @@ func expandCommand(command, wsName, project string) string {
 	).Replace(command)
 }
 
+// appendShellArgs adds passthrough arguments to a slate.yml command. The
+// command is a shell string, so each argument is single-quoted to reach the
+// process intact. Appended after placeholder expansion: a caller's prompt
+// that happens to contain {{PROJECT}} is its own text, not a template.
+func appendShellArgs(command string, args []string) string {
+	var b strings.Builder
+	b.WriteString(command)
+	for _, a := range args {
+		b.WriteString(" '")
+		b.WriteString(strings.ReplaceAll(a, "'", `'\''`))
+		b.WriteString("'")
+	}
+	return b.String()
+}
+
+// slateBinEnv points a host command's `slate` at the binary running it.
+// These commands are often launched by a scheduler whose PATH is minimal, or
+// which carries an older slate ahead of this one; either way `slate agent` in
+// a hook has to mean this slate rather than whatever PATH happens to resolve.
+func slateBinEnv() []string {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	return []string{
+		"SLATE_BIN=" + exe,
+		"PATH=" + filepath.Dir(exe) + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}
+}
+
+// hostCmdOpts carries the per-call variations of a host command: arguments
+// appended to the configured command, and extra environment.
+type hostCmdOpts struct {
+	args []string
+	env  []string
+}
+
 // runHostCommand executes a slate.yml host command via sh -c in the workspace
 // dir. Ordinary non-zero exits (ctrl-c, `exit 1`) aren't slate failures, but
 // 126 and 127 mean the command itself couldn't run and must be surfaced.
-func runHostCommand(cfg config.ProjectConfig, command, wsName, wsDir string, fresh bool, extraEnv ...string) error {
+func runHostCommand(cfg config.ProjectConfig, command, wsName, wsDir string, fresh bool, opts hostCmdOpts) error {
 	project, err := workspace.ProjectName(cfg.Project)
 	if err != nil {
 		return err
 	}
-	expanded := expandCommand(command, wsName, project)
+	expanded := appendShellArgs(expandCommand(command, wsName, project), opts.args)
 
 	freshEnv := "0"
 	if fresh {
@@ -201,7 +264,8 @@ func runHostCommand(cfg config.ProjectConfig, command, wsName, wsDir string, fre
 		"SLATE_FRESH="+freshEnv,
 		"SLATE_PROVISIONING="+provisioningEnv,
 	)
-	c.Env = append(c.Env, extraEnv...)
+	c.Env = append(c.Env, slateBinEnv()...)
+	c.Env = append(c.Env, opts.env...)
 	if err := c.Run(); err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
@@ -215,13 +279,23 @@ func runHostCommand(cfg config.ProjectConfig, command, wsName, wsDir string, fre
 	return nil
 }
 
-// upAt is what new/up drop into after provisioning (behind the
-// auto_cd/--cd gate): the up hook if configured, then a shell.
-func upAt(cfg config.ProjectConfig, wsName, wsDir string, fresh bool) error {
-	if cfg.Up != "" {
-		if err := runHostCommand(cfg, cfg.Up, wsName, wsDir, fresh); err != nil {
+// upAt is what new/up drop into after provisioning: the up hook if
+// configured (behind the --hooks gate), then a shell (behind auto_cd/--cd).
+func upAt(cfg config.ProjectConfig, wsName, wsDir string, fresh, cd, hooks bool) error {
+	if hooks && cfg.Up != "" {
+		if err := runHostCommand(cfg, cfg.Up, wsName, wsDir, fresh, hookOpts()); err != nil {
 			fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
 		}
 	}
+	if !cd {
+		return nil
+	}
 	return spawnShellUnlessFinished(wsDir)
+}
+
+// hookOpts is the environment a new:/up: hook runs with. SLATE_HOOKS=1 keeps
+// the chain the hook starts enabled: a hook that runs `slate agent` must not
+// then hit the terminal check, since the operator already opted in here.
+func hookOpts() hostCmdOpts {
+	return hostCmdOpts{env: []string{"SLATE_HOOKS=1"}}
 }

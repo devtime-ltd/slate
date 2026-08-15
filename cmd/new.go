@@ -18,6 +18,7 @@ import (
 var newBranch string
 var newBg bool
 var newCd bool
+var newHooks bool
 var newAdopt bool
 var newBare bool
 
@@ -33,6 +34,7 @@ func init() {
 	newCmd.Flags().StringVarP(&newBranch, "branch", "b", "", "Git branch name (default: slate/<name>)")
 	newCmd.Flags().BoolVar(&newBg, "bg", false, "Run container build + lifecycle in the background")
 	newCmd.Flags().BoolVar(&newCd, "cd", false, "Spawn a shell in the workspace directory (default from global auto_cd; pass --cd=false to opt out)")
+	newCmd.Flags().BoolVar(&newHooks, "hooks", false, "Run the new: hook (default: only at an interactive terminal, or with SLATE_HOOKS=1)")
 	newCmd.Flags().BoolVar(&newAdopt, "adopt", false, "Carry uncommitted changes from the main checkout into the new worktree")
 	newCmd.Flags().BoolVar(&newBare, "bare", false, "Worktree + scaffold only, no containers (provision later with 'slate up')")
 	newCmd.MarkFlagsMutuallyExclusive("bare", "bg")
@@ -49,7 +51,7 @@ func runNew(cmd *cobra.Command, args []string) error {
 			return rescueErr
 		}
 	}
-	return createWorkspace(name, newBranch, newBg, resolveAutoCd(cmd, "cd", newCd), newAdopt, newBare)
+	return createWorkspace(name, newBranch, newBg, resolveAutoCd(cmd, "cd", newCd), resolveHooks(cmd, "hooks", newHooks), newAdopt, newBare)
 }
 
 // offerShorterName rescues the one fixable validation failure, a too-long
@@ -73,7 +75,7 @@ func offerShorterName(name string, verr error) (string, error) {
 	return suggestion, nil
 }
 
-func createWorkspace(name, branch string, bg, cd, adopt, bare bool) error {
+func createWorkspace(name, branch string, bg, cd, hooks, adopt, bare bool) error {
 	// Bare creation touches only git and generated files; it must work
 	// without Docker installed.
 	if !bare {
@@ -214,19 +216,16 @@ func createWorkspace(name, branch string, bg, cd, adopt, bare bool) error {
 
 	// A configured `new:` hook opts the project into background provisioning
 	// so the hook runs right after the fast phase, while containers come up.
-	// Same cd/TTY gate as the up hook: scripts and CI get sync provisioning.
-	if bg || (cd && cfg.New != "") {
-		return runBackgroundProvision(cfg, name, wsDir, opts, cd, cfg.New)
+	// Same gate as the up hook: scripts and CI get sync provisioning.
+	if bg || (hooks && cfg.New != "") {
+		return runBackgroundProvision(cfg, name, wsDir, opts, cd, hooks, cfg.New)
 	}
 
 	if err := runWorkspaceLifecycle(env, name, wsDir, hostname, cfg, proxyConfig, opts); err != nil {
 		return fmt.Errorf("%w\n\nThe worktree is intact — resume provisioning with:\n  slate up %s", err, name)
 	}
 
-	if cd {
-		return upAt(cfg, name, wsDir, true)
-	}
-	return nil
+	return upAt(cfg, name, wsDir, true, cd, hooks)
 }
 
 func hostCommand(name string, args ...string) *exec.Cmd {
