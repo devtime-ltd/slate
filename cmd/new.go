@@ -34,7 +34,7 @@ func init() {
 	newCmd.Flags().BoolVar(&newBg, "bg", false, "Run container build + lifecycle in the background")
 	newCmd.Flags().BoolVar(&newCd, "cd", false, "Spawn a shell in the workspace directory (default from global auto_cd; pass --cd=false to opt out)")
 	newCmd.Flags().BoolVar(&newAdopt, "adopt", false, "Carry uncommitted changes from the main checkout into the new worktree")
-	newCmd.Flags().BoolVar(&newBare, "bare", false, "Worktree + scaffold only, no containers (provision later with `slate up`)")
+	newCmd.Flags().BoolVar(&newBare, "bare", false, "Worktree + scaffold only, no containers (provision later with 'slate up')")
 	newCmd.MarkFlagsMutuallyExclusive("bare", "bg")
 	newCmd.GroupID = "workspace"
 	rootCmd.AddCommand(newCmd)
