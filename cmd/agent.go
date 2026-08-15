@@ -20,8 +20,8 @@ var agentCmd = &cobra.Command{
 	Long: `Runs the "agent:" command from the main checkout's slate.yml in the
 workspace directory. Configure a single command, or a [first-run, thereafter]
 pair; the first-run variant is picked on the workspace's first agent entry
-(tracked via .slate/agent-started), whether that entry comes through the up
-hook (SLATE_FRESH=1) or directly in a bare workspace.
+(tracked via .slate/agent-pending and .slate/agent-started), whether that
+entry comes through the up hook (SLATE_FRESH=1) or directly.
 
 Placeholders expanded: {{WORKSPACE}}, {{PROJECT}}, {{HOSTNAME}}.`,
 	GroupID: "tools",
@@ -51,15 +51,26 @@ func agentStartedMarker(wsDir string) string {
 	return filepath.Join(wsDir, ".slate", "agent-started")
 }
 
+func agentPendingMarker(wsDir string) string {
+	return filepath.Join(wsDir, ".slate", "agent-pending")
+}
+
 // agentFresh decides whether this is the workspace's first agent entry.
 // The agent-started marker is the source of truth once it exists: it stops
 // a bare workspace's later `slate up` (which sets SLATE_FRESH=1) from
-// re-running the first-run variant over a live session. Without a marker,
-// SLATE_FRESH=1 (up hook) or a bare workspace means first entry; existing
-// pre-marker workspaces fall through to the thereafter variant as before.
+// re-running the first-run variant over a live session. Before it, the
+// agent-pending marker (written at creation, cleared after the first
+// session) means first entry however the workspace was provisioned - a
+// non-interactive provision fires no up hook, so there is no SLATE_FRESH=1
+// entry to catch. SLATE_FRESH=1 and the bare unprovisioned marker remain
+// for workspaces created before the pending marker existed; anything else
+// falls through to the thereafter variant as before.
 func agentFresh(wsDir string) bool {
 	if _, err := os.Stat(agentStartedMarker(wsDir)); err == nil {
 		return false
+	}
+	if _, err := os.Stat(agentPendingMarker(wsDir)); err == nil {
+		return true
 	}
 	if os.Getenv("SLATE_FRESH") == "1" {
 		return true
@@ -80,6 +91,7 @@ func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool) error 
 	err := runHostCommand(cfg, command, wsName, wsDir, fresh, "SLATE_AGENT=1")
 	if err == nil {
 		_ = os.WriteFile(agentStartedMarker(wsDir), nil, 0o644)
+		_ = os.Remove(agentPendingMarker(wsDir))
 		offerTeardownOnExit(wsName, wsDir)
 	}
 	return err

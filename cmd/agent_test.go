@@ -18,15 +18,18 @@ func TestAgentFresh(t *testing.T) {
 	cases := []struct {
 		name     string
 		marker   bool
+		pending  bool
 		bare     bool
 		freshEnv string
 		want     bool
 	}{
-		{"first entry via up hook", false, false, "1", true},
-		{"first entry in bare workspace", false, true, "", true},
-		{"existing pre-marker workspace", false, false, "", false},
-		{"marker beats SLATE_FRESH", true, false, "1", false},
-		{"marker beats bare", true, true, "", false},
+		{"first entry via up hook", false, false, false, "1", true},
+		{"first entry in bare workspace", false, false, true, "", true},
+		{"first entry after non-interactive provision", false, true, false, "", true},
+		{"existing pre-marker workspace", false, false, false, "", false},
+		{"marker beats SLATE_FRESH", true, false, false, "1", false},
+		{"marker beats bare", true, false, true, "", false},
+		{"marker beats pending", true, true, false, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -36,6 +39,11 @@ func TestAgentFresh(t *testing.T) {
 			}
 			if tc.marker {
 				if err := os.WriteFile(agentStartedMarker(wsDir), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.pending {
+				if err := os.WriteFile(agentPendingMarker(wsDir), nil, 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
