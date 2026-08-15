@@ -53,6 +53,7 @@ Workspace lifecycle:
   slate down [name]               Stop (preserves data)
   slate restart [name] [service]  Restart workspace or single service
   slate rm [name]                 Destroy workspace (containers, volumes, worktree)
+  slate done [name]               Finish a workspace: verify the work landed, then tear it down
   slate ls [--all]                List workspaces (current project or all registered)
   slate wait [name]               Block until a background provision finishes
 
@@ -66,7 +67,7 @@ Tools:
   slate cd [name]                 Spawn a sub-shell rooted at the workspace dir
   slate code [name]               Open workspace in your editor
   slate shell [name]              Bash shell in app container
-  slate agent [name]              Run the agent command in a workspace (see Agent)
+  slate agent [name] [-- args]    Run the agent command in a workspace (see Agent)
   slate exec [-s svc] -- <cmd>    Run an arbitrary command in a container (-i for a TTY)
   slate logs [name] [svc]         Tail logs (default: all services)
   slate proxy                     Manage the HTTPS proxy
@@ -91,11 +92,13 @@ Add `--project <name>` to any command to target a project other than the current
 - `slate new <name> -b <branch>`: custom branch name (default: `slate/<name>`).
 - `slate new <name> --bg`: fork the slow phase (build + lifecycle) to the background; the fast phase (worktree + scaffold) runs inline so editing can start immediately. Progress is captured in `.slate/workspaces/<name>/.slate/provision.log` and surfaced as `provisioning` in `slate ls` (`failed` if it errors). While a bg provision is in flight, `slate up` and `slate restart` refuse to touch the workspace; `slate exec`, `slate shell`, and the scaffold tools wait for it instead of failing; `slate wait` blocks until it finishes (non-zero exit + log tail on failure); `slate rm` aborts it as an escape hatch. A configured `new:` hook backgrounds provisioning automatically, no flag needed (see [Agent](#agent--new--up-what-newup-drop-you-into)).
 - `slate new <name> --cd` / `--cd=false`: opt in or out of dropping into a shell at the new workspace. Default comes from `auto_cd` in `~/.config/slate/config.yml` (default `true`), suppressed when stdio isn't an interactive terminal so scripts/CI/agents never block on a spawned shell. With `--bg` the shell is spawned immediately; without, after provisioning finishes.
+- `slate new <name> --hooks` / `slate up [name] --hooks`: run the `new:`/`up:` hook. Same default as `--cd` (an interactive terminal, or `SLATE_HOOKS=1`), but a separate switch, so a scheduler can fire the hook without also spawning a shell, or drop into a shell without firing it.
 - `slate new <name> --adopt`: carry your uncommitted changes from the main checkout into the new worktree (tracked changes patched in, untracked files copied). The main checkout is left untouched.
 - `slate new <name> --bare`: worktree + scaffold only, no containers; for quick edits that don't need a running app. Shown as `bare` in `slate ls`; the first `slate up` provisions it with the fresh-workspace lifecycle. Hooks don't fire.
 - `slate up [name] --fresh`: recreate containers + volumes (worktree code preserved) and run the new-workspace lifecycle.
 - `slate up [name] --build`: force image rebuild.
 - `slate rm [name]`: warns if the worktree has uncommitted changes (`3 modified, 1 untracked`) before asking for confirmation; `-f` skips the prompt but still warns to stderr. If your shell's cwd was inside the workspace being destroyed and you're in a slate-spawned shell (auto-cd, `slate cd`), slate exits it so you pop straight back to the shell you came from, history intact; otherwise it drops you into a sub-shell at the project's main checkout (type `exit` to return).
+- `slate done [name]`: `rm` with the burden of proof inverted. It destroys nothing until the work provably landed: worktree clean, no provisioning in flight, and the branch merged into the default branch or its exact tip merged via a PR **into the default branch** (checked with `gh`, so rebase- and squash-merges count). Conclusive evidence tears down without a prompt; anything less refuses with the reasons (`slate rm` stays the force path), and a gh outage refuses honestly rather than reading as "no PR". Run for the session's own workspace inside a live agent session, it stages the teardown instead of executing it - see [Agent](#agent--new--up-what-newup-drop-you-into). Branch deletion only ever overrides the usual pushed-or-merged safety check on PR-proven evidence, and never touches the default branch.
 
 ### One-off commands: `slate exec`
 
@@ -223,7 +226,24 @@ up: slate agent    # slate up: runs after provisioning finishes
 
 With `new:` configured, `slate new foo` needs no flags and no waiting: the worktree and scaffold are created inline (seconds), provisioning forks to the background, and the hook runs immediately, so you brief your agent while the containers come up. The hook's session gets `SLATE_PROVISIONING=1` (0 otherwise) so tooling can tell it started mid-provision, and `slate exec` plus the scaffold tools block on the in-flight provision automatically, so the agent's first container command simply waits instead of failing. `slate wait` is the explicit check (instant when ready, non-zero exit with the log tail when provisioning failed); the `slate brief` cheatsheet tells your agent about it. Both hooks sit behind the same interactive-terminal gate as `auto_cd`, so scripts and CI invoking `slate new` still provision synchronously.
 
-All three commands run in the worktree via `sh -c` with `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` expanded and `SLATE_WORKSPACE`, `SLATE_PROJECT`, `SLATE_FRESH`, `SLATE_PROVISIONING` in the environment. `slate agent` with no `agent:` configured is an error. The hooks can be anything:
+Schedulers (cron, launchd, a routine runner) have no terminal, so the hooks stay quiet there by default and `slate agent` refuses outright rather than launching an interactive agent into a dead pipe. Two switches open it up: `--hooks` on `slate new`/`slate up`, and `SLATE_HOOKS=1` in the environment, which does the same and additionally lets `slate agent` run without a terminal. A hook slate fires itself always passes `SLATE_HOOKS=1` down, so `new: slate agent` works as one chain. The usual shape is to give the session a real terminal anyway:
+
+```bash
+# a detached tmux pane is a pty, so hooks and slate agent behave as at a terminal
+tmux new-session -d -s sparta--log-triage 'slate new log-triage --project sparta'
+```
+
+Sessions also get an exit path. The agent command is a child process, so when the session ends slate is still there and uses the moment. A teardown staged in-session by `slate done` runs now, after a re-verify (if the workspace changed since staging, the request is dropped with the reasons instead). With nothing staged, slate checks whether the work landed - and only when it provably did (merged PR, clean worktree) offers `Work landed (PR #42 merged into main · worktree clean). Tear down api? [y/N]`. Mid-work exits and fresh workspaces stay silent, and declining is remembered per commit, so re-entering a merged-but-kept workspace doesn't nag. The end-to-end flow this buys: tell your agent the PR is merged, it runs `slate done` as its last action (staged, because destroying a worktree under a live session would break it), and the workspace, containers, and branch are gone the moment you exit.
+
+One caveat: wrap sessions in tmux via the `up:` hook (as below), not inside `agent:` itself. A tmux-wrapped `agent:` exits when you *detach*, while claude lives on inside the session - the exit hook would then run (and a staged teardown would fire) under a still-running session.
+
+Anything after `--` is appended to the configured command, shell-quoted, so a caller can add its own flags or a prompt without a second entry in `slate.yml`:
+
+```bash
+slate agent log-triage -- --permission-mode acceptEdits "$(cat prompt.md)"
+```
+
+All three commands run in the worktree via `sh -c` with `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` expanded and `SLATE_WORKSPACE`, `SLATE_PROJECT`, `SLATE_FRESH`, `SLATE_PROVISIONING` in the environment (the agent command additionally gets `SLATE_AGENT=1`). Placeholders are expanded before the passthrough arguments are appended, so a prompt containing `{{PROJECT}}` stays its own text. `PATH` is prefixed with the running binary's own directory and `SLATE_BIN` holds its full path, so `slate` inside a hook always means the slate that fired it, not whatever an inherited `PATH` resolves first. `slate agent` with no `agent:` configured is an error. The hooks can be anything:
 
 ```yaml
 # a session that survives your terminal app and allows multiple attachments
@@ -242,6 +262,7 @@ Slate is designed to be driven by an LLM running on the host:
 - Non-interactive contexts fail fast with instructions instead of prompting (`slate up missing-ws` errors rather than asking to create; `slate exec` runs without a TTY and forwards stdin).
 - Container commands self-synchronise with background provisioning: `slate exec` and the scaffold tools wait for an in-flight provision, and `slate wait` makes the check explicit.
 - `slate brief` prints a project-aware markdown cheatsheet (workspace targeting, tools, URLs, the container test-database gotcha) for pasting into your `CLAUDE.md`/`AGENTS.md`.
+- `slate done` gives agents a safe finish verb: it refuses with reasons unless the work provably landed, and inside a live session (`SLATE_AGENT=1`) it stages the teardown for session exit rather than deleting the worktree out from under itself.
 
 ## Scaffolds
 

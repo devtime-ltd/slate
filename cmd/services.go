@@ -62,6 +62,21 @@ func resolveAutoCd(cmd *cobra.Command, flagName string, flagVal bool) bool {
 	return cfg.AutoCd
 }
 
+// resolveHooks reports whether the new:/up: host hooks should run. They exist
+// to drop a human into the workspace, so the default is the same TTY gate as
+// auto_cd; --hooks or SLATE_HOOKS=1 lets a scheduler opt in explicitly. Kept
+// separate from --cd so a hook can run without also spawning a shell.
+func resolveHooks(cmd *cobra.Command, flagName string, flagVal bool) bool {
+	if cmd.Flags().Changed(flagName) {
+		return flagVal
+	}
+	return hooksOptIn() || isInteractiveTerminal()
+}
+
+func hooksOptIn() bool {
+	return os.Getenv("SLATE_HOOKS") == "1"
+}
+
 // isInteractiveTerminal reports whether both stdin and stdout are character
 // devices (i.e. a real TTY), rather than pipes or files.
 func isInteractiveTerminal() bool {

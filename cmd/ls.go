@@ -269,6 +269,8 @@ type prRef struct {
 	URL         string `json:"url"`
 	State       string `json:"state"`
 	HeadRefName string `json:"headRefName"`
+	HeadRefOid  string `json:"headRefOid"`
+	BaseRefName string `json:"baseRefName"`
 }
 
 // prsByBranch maps head branch -> open or merged PR via one `gh pr list`
@@ -278,7 +280,7 @@ type prRef struct {
 func prsByBranch(dir string) map[string]prRef {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--state", "all", "--json", "number,headRefName,url,state", "--limit", "200")
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--state", "all", "--json", "number,headRefName,headRefOid,url,state", "--limit", "200")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {

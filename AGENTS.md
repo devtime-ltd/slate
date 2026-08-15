@@ -88,6 +88,45 @@ containers. A stale `.failed` marker deliberately doesn't block those
 commands (debugging a half-provisioned workspace is legitimate); only a live
 or died-in-flight provision does.
 
+Session finish (`cmd/done.go` + `offerTeardownOnExit` in agent.go): `slate
+done` is evidence-gated teardown. `checkLanded` fails CLOSED on every
+uncertainty (it feeds promptless destruction): provisioning in flight, a
+git-status error (`worktreeStatus`, the error-honest sibling of
+`dirtyWorktreeSummary`), detached HEAD, or the worktree sitting on the
+default branch all refuse. Landed = clean worktree + (ancestry into the
+default branch, or a MERGED PR into the default branch - `prForBranch` is a
+targeted `gh pr list --head` so PR age/repo size don't matter, and a gh
+failure is reported as "could not check", never as "no PR"). `ev.hasWork`
+distinguishes merged work from no-commits/stale workspaces (only real work
+triggers the unsolicited [y/N] exit offer); `ev.prProven` gates
+`branchOverride()` - only PR-proven evidence may overrule BranchSafety in
+cleanupBranch, ancestry-only evidence never does, and cleanupBranch
+hard-refuses the default branch regardless. Staging: `done` for the
+session's OWN workspace (SLATE_AGENT=1 + SLATE_WORKSPACE match) stages;
+other workspaces tear down immediately. The teardown markers
+(`.<name>.teardown-staged` / `.teardown-declined`) live BESIDE the worktree
+in the host-only workspaces root, never inside it - the worktree is
+container-writable and control files that authorise destruction must not
+be forgeable or symlinkable from container code (`createMarkerFile` is
+remove-then-O_EXCL so a planted link fails loudly). The staged marker records the verified tip and is honoured
+only while HEAD still is that tip; `slate new` and rm's orphan path clear
+stale markers so a reused name can't inherit a prior incarnation's
+authorisation. `offerTeardownOnExit` re-verifies before honouring the
+marker, clears it if the workspace regressed, and remembers a declined
+offer per tip so re-entries don't nag.
+Destruction is shared with rm via `destroyWorkspace` (prompt-free; callers
+own confirmation; escapeCwd=false in the exit hook because that process's
+cwd is pinned to the worktree, not the user's shell); evidence-gated
+callers pass the verified evidence and the removal re-checks clean state
+AND the same branch/tip immediately before `git worktree remove --force`,
+after all slow container/proxy teardown. `prForBranch` ranks a branch's
+PRs by evidence value (merged-into-default with matching head first) so an
+open PR on the same head can't mask the merged one. The new:/up: hook callers return
+through `spawnShellUnlessFinished` so a teardown during the hook doesn't
+chdir-fail into a deleted worktree. Known accepted gaps: a tmux-wrapped
+`agent:` fires the hook on detach (documented - wrap in `up:` instead), and
+`killProvisioningLock`'s SIGTERM-without-wait race predates this feature.
+
 Related trust rule: `scaffold:`, `files:`, `database:`, and `env:`
 (host-reaching config: they can mount host files, define containers, or
 interpolate into compose files, env via the `--env-file` role of

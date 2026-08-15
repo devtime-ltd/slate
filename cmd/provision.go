@@ -89,18 +89,21 @@ func runProvision(cmd *cobra.Command, args []string) error {
 }
 
 // runBackgroundProvision forks the bg provisioner, then runs the `new:` hook
-// (when configured and cd-gated), drops into a shell at the workspace dir
+// (when configured and hooks-gated), drops into a shell at the workspace dir
 // (cd=true), or prints the path and exits. Never the up hook: the containers
 // are still provisioning; the new hook exists precisely to run before them.
-func runBackgroundProvision(cfg config.ProjectConfig, name, wsDir string, opts provisionOpts, cd bool, newHook string) error {
+func runBackgroundProvision(cfg config.ProjectConfig, name, wsDir string, opts provisionOpts, cd, hooks bool, newHook string) error {
 	if err := detachProvision(name, wsDir, opts); err != nil {
 		return err
 	}
-	if cd && newHook != "" {
-		if err := runHostCommand(cfg, newHook, name, wsDir, opts.fresh); err != nil {
+	if hooks && newHook != "" {
+		if err := runHostCommand(cfg, newHook, name, wsDir, opts.fresh, hookOpts()); err != nil {
 			fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
 		}
-		return spawnShellAt(wsDir)
+		if !cd {
+			return nil
+		}
+		return spawnShellUnlessFinished(wsDir)
 	}
 	if !cfg.Agent.IsZero() {
 		fmt.Println("Run `slate agent` once provisioning completes.")
@@ -173,6 +176,17 @@ func detachProvision(name, wsDir string, opts provisionOpts) error {
 	fmt.Printf("Provisioning in background (log: %s).\n", logPath)
 	fmt.Println("Run `tail -f " + logPath + "` to follow.")
 	return nil
+}
+
+// spawnShellUnlessFinished is spawnShellAt for the hook-return path: the
+// new:/up: hook may have finished the workspace (a staged `slate done` or
+// the exit-hook offer), in which case the directory to shell into no longer
+// exists and there is nothing left to do.
+func spawnShellUnlessFinished(dir string) error {
+	if _, err := os.Stat(dir); err != nil {
+		return nil
+	}
+	return spawnShellAt(dir)
 }
 
 // spawnShellAt runs $SHELL with cwd set to dir. Non-zero shell exits (e.g.
