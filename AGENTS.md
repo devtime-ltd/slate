@@ -66,20 +66,51 @@ User-defined tools in `slate.yml` are always exec tools. Scaffolds can mix both.
 ## Agent (`agent:`) + new/up hooks (`new:`/`up:`)
 
 `agent:` is the command `slate agent [name]` runs in the worktree: a single
-command or a `[first-run, thereafter]` pair (first-run picked when
-SLATE_FRESH=1). Two hooks fire it (or anything else): `new:` runs straight
-after `slate new`'s fast phase and its presence auto-backgrounds provisioning
-(the point: enter an agent session while containers come up); `up:` runs
-after provisioning finishes before dropping to the shell, and is never run on
-the bg path. Both sit behind the auto_cd/--cd TTY gate, and all three
-commands run through `sh -c` with {{WORKSPACE}}/{{PROJECT}}/{{HOSTNAME}}
-expanded and SLATE_WORKSPACE/SLATE_PROJECT/SLATE_FRESH/SLATE_PROVISIONING
-set (PROVISIONING=1 when the lockfile shows a live bg provision at launch).
+command or a `[first-run, thereafter]` pair (first-run picked on the
+workspace's first entry: no `.slate/agent-started` marker yet, plus either
+SLATE_FRESH=1 or a bare workspace). Two hooks fire it (or anything else):
+`new:` runs straight after `slate new`'s fast phase and its presence
+auto-backgrounds provisioning (the point: enter an agent session while
+containers come up); `up:` runs after provisioning finishes before dropping
+to the shell, and is never run on the bg path. Both sit behind the
+auto_cd/--cd TTY gate, and all three commands run through `sh -c` with
+{{WORKSPACE}}/{{PROJECT}}/{{HOSTNAME}} expanded and
+SLATE_WORKSPACE/SLATE_PROJECT/SLATE_FRESH/SLATE_PROVISIONING set
+(PROVISIONING=1 when the lockfile shows a live bg provision at launch).
 They execute on the HOST by design (the user's own login/skills/MCPs/git
 apply), so all three fields are pinned to the MAIN checkout's slate.yml: the
 worktree copy is container-writable and must never drive host execution.
 Workspace-side edits to them are inert and surface a note
 (`config.HostExecPinned`).
+
+`slate agent` distrusts a command that returns too fast to have hosted a
+session, because such a command can still exit 0 and so reads as a clean quit:
+`runHostCommandDetail` times the run and `hostRun.bailed()` compares it against
+`agentMinRuntime()` (3s; SLATE_AGENT_MIN_RUNTIME overrides, 0 disables). A
+bailed launch skips the agent-started marker, so the failure isn't baked into
+the next entry's variant choice; a failed first-run launch additionally writes
+`firstRunPendingMarker` (`.slate/agent-first-run-pending`), which `agentFresh`
+honours ahead of SLATE_FRESH/bareness, because those signals don't survive to
+the next invocation and the owed first-run entry would otherwise fall through
+to the thereafter variant. A bail of the thereafter variant retries the
+first-run one once (the stale `claude --continue` shape: it presumed a session
+the workspace hasn't got, and exits 0 or 1 depending on the claude build);
+signal deaths and 126/127 don't retry, the first being the launch stopped from
+outside, the second a config problem whose surfaced error a retry would mask. Every run's outcome lands in the
+workspace's `.slate/agent-last-run` (`recordAgentRun`), because an exit outside
+the bail window returns cleanly and takes any enclosing tmux session with it,
+leaving no other evidence. All host-side `.slate` marker writes and removals go
+through a pinned directory fd (`openSlateDir`: O_NOFOLLOW, then
+openat/unlinkat that never re-walk the path), because the worktree is
+container-writable and a planted or concurrently-swapped link could otherwise
+redirect the operation to files outside the workspace. `holdWorkspaceOpen` then leaves a
+shell in the workspace rather than returning, because the documented tmux
+recipe makes `slate agent` the session's only command and a return would take
+the session and the diagnostic with it; `--no-hold` and non-TTY invocations
+return the error instead. The same hold covers an unusable `agent:`
+(`agentUnconfiguredError`, which names the main checkout's slate.yml and calls
+out a workspace-only `agent:`), and `hookNeedsAgentNote` warns when a hook
+shells out to `slate agent` with none configured.
 
 Sessions entered mid-provision stay safe via `cmd/wait.go`: `slate wait`
 blocks on the provisioning lockfile and reports the outcome (log tail on

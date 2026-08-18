@@ -220,11 +220,11 @@ new: slate agent   # slate new: runs immediately, containers provision behind it
 up: slate agent    # slate up: runs after provisioning finishes
 ```
 
-`agent` is either a single command or a `[first-run, thereafter]` pair; the first-run variant is picked when `SLATE_FRESH=1`, which slate sets for hooks fired from a fresh `slate new`. With the pair above, every new workspace starts a claude session named `<project>--<workspace>` (resumable later with `claude --resume <name>`), and re-entry continues where you left off.
+`agent` is either a single command or a `[first-run, thereafter]` pair; the first-run variant is picked on the workspace's first agent entry, which slate records in `.slate/agent-started` once a session has actually run. A fresh `slate new` (`SLATE_FRESH=1`) and a bare workspace both count as that first entry. With the pair above, every new workspace starts a claude session named `<project>--<workspace>` (resumable later with `claude --resume <name>`), and re-entry continues where you left off.
 
 With `new:` configured, `slate new foo` needs no flags and no waiting: the worktree and scaffold are created inline (seconds), provisioning forks to the background, and the hook runs immediately, so you brief your agent while the containers come up. The hook's session gets `SLATE_PROVISIONING=1` (0 otherwise) so tooling can tell it started mid-provision, and `slate exec` plus the scaffold tools block on the in-flight provision automatically, so the agent's first container command simply waits instead of failing. `slate wait` is the explicit check (instant when ready, non-zero exit with the log tail when provisioning failed); the `slate brief` cheatsheet tells your agent about it. Both hooks sit behind the same interactive-terminal gate as `auto_cd`, so scripts and CI invoking `slate new` still provision synchronously.
 
-All three commands run in the worktree via `sh -c` with `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` expanded and `SLATE_WORKSPACE`, `SLATE_PROJECT`, `SLATE_FRESH`, `SLATE_PROVISIONING` in the environment. `slate agent` with no `agent:` configured is an error. The hooks can be anything:
+All three commands run in the worktree via `sh -c` with `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` expanded and `SLATE_WORKSPACE`, `SLATE_PROJECT`, `SLATE_FRESH`, `SLATE_PROVISIONING` in the environment. `slate agent` with no `agent:` configured is an error naming the main checkout's `slate.yml`, and says so explicitly when the workspace's own copy sets one (a common way to configure the agent somewhere slate never reads). The hooks can be anything:
 
 ```yaml
 # a session that survives your terminal app and allows multiple attachments
@@ -234,6 +234,20 @@ up: tmux new-session -A -s {{HOSTNAME}} 'slate agent'
 (`tmux new -A` re-attaches an existing server session, which keeps its original environment, so `SLATE_FRESH` only reaches `slate agent` on the session that created the server.)
 
 These commands execute on your **host**: your normal claude login, skills, MCPs, and git access all apply. Because of that, `agent`, `new`, and `up` are always read from the **main checkout's** `slate.yml` and never from the workspace copy: the worktree is writable by container code, so a compromised dependency could otherwise edit `slate.yml` and wait for your next slate command. Workspace-side edits to these fields are inert and get a note saying so; land them in the main checkout to take effect. The blast-radius protection stays where it always was, in the containers that run the app and its dependency installs.
+
+### When the agent command never starts
+
+An agent command that returns straight away hasn't hosted a session, whatever its exit code. `claude --continue` with no conversation to continue prints its complaint and exits (0 or 1, depending on the claude build), which reads as a clean quit or an ordinary command failure: either way it takes any enclosing tmux session down with it and nothing records that the session never happened. Slate treats an `agent:` command that exits within three seconds as a failed launch instead of a clean exit:
+
+- it reports which variant ran, how long it lasted, its exit code and the expanded command;
+- it doesn't record the workspace's first agent entry, so the next `slate agent` still gets the first-run variant rather than inheriting the failure; a failed first-run launch is remembered (`.slate/agent-first-run-pending`), because the freshness signals (`SLATE_FRESH`, bareness) are gone by the next invocation and the entry would otherwise fall through to the thereafter variant with the first-run command still owed;
+- if the *thereafter* variant is what bailed, it retries the first-run variant once: a `--continue` that returns at once means the session it assumed isn't there, so the first-run command is the one that should have run. Signal deaths and exits meaning the command itself couldn't run (126/127) don't retry: the first is the launch being stopped, the second a config problem that retrying the other variant would mask;
+- it records every run's outcome (timestamp, variant, exit code, duration, command) in the workspace's `.slate/agent-last-run`, so even a launch that takes its tmux session down leaves evidence;
+- at a terminal it leaves a shell in the workspace instead of returning, so a tmux session wrapping `slate agent` survives with the diagnostic on screen. `slate agent --no-hold` exits instead, as does any non-interactive invocation.
+
+Set `SLATE_AGENT_MIN_RUNTIME` (seconds, `0` disables the check) if your `agent:` legitimately hands off and returns at once.
+
+A `new:`/`up:` hook that runs `slate agent` when no `agent:` is configured gets a warning before the hook fires, rather than failing invisibly inside the hook's own process.
 
 ### Slate for agents
 
