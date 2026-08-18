@@ -329,3 +329,22 @@ The registered projects index lives at `~/.config/slate/projects` (one `name=pat
 That's it. Everything else is managed by slate.
 
 `slate setup` also makes `*.test` resolve locally by running a small dnsmasq container on `127.0.0.1:53` and pointing `/etc/resolver/test` at it (one `sudo` prompt, macOS). On Linux the container runs the same way, but you point your system resolver (systemd-resolved/NetworkManager) at `127.0.0.1` for `*.test` yourself. If `*.test` already resolves (e.g. you run your own dnsmasq), slate leaves it alone.
+
+### Docker network limits
+
+Every running workspace takes one Docker network, and Docker allocates each network a subnet from its default address pools. Those pools, not memory or disk, are what caps how many workspaces you can run at once: stock Docker Engine defines 32 (`172.17.0.0/12` at `/16`, plus `192.168.0.0/16` at `/20`) and OrbStack 30. Past that, `slate up` fails with `all predefined address pools have been fully subnetted`.
+
+Slate reclaims what it can. `slate down` sweeps networks left behind by workspaces stopped outside slate (a reboot, an OrbStack restart, a manual `docker stop`), a failed `slate up` retries once after sweeping, and `slate doctor` reports the budget:
+
+```
+  ✔ docker address pools (6 of 30 networks in use, 1 reclaimable)
+```
+
+If you keep more workspaces than that, raise the ceiling in the Docker daemon config. A workspace needs a handful of addresses, not the 254 a `/24` gives it, so a smaller subnet size buys far more networks from the same space. On OrbStack edit `~/.orbstack/config/docker.json` via `orb config docker`, which restarts the engine; on Docker Engine, `/etc/docker/daemon.json`:
+
+```json
+{ "default-address-pools": [{ "base": "10.99.0.0/16", "size": 27 }] }
+```
+
+That gives 2048 networks of 29 usable addresses each. Pick a base that does not overlap anything you route to, such as a VPN or an office LAN, and note that existing networks keep their current subnets until they are recreated.
+
