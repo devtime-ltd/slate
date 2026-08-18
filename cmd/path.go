@@ -45,6 +45,22 @@ var pathCmd = &cobra.Command{
 	},
 }
 
+var pwdCmd = &cobra.Command{
+	Use:     "pwd",
+	Short:   "Print the project's main checkout (pipeable)",
+	Long:    "Prints the main checkout of the project, resolved from --project or from the CWD.\nThe repo-level counterpart to `slate path`, which names a workspace inside it.",
+	Args:    cobra.NoArgs,
+	GroupID: "tools",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mainRoot, err := workspace.MainRoot()
+		if err != nil {
+			return err
+		}
+		fmt.Println(mainRoot)
+		return nil
+	},
+}
+
 var cdCmd = &cobra.Command{
 	Use:     "cd [workspace]",
 	Short:   "Spawn a sub-shell rooted at the workspace directory",
@@ -144,6 +160,7 @@ func promptForEditor() (string, error) {
 func init() {
 	pathCmd.Flags().BoolVar(&pathOpen, "open", false, "Open workspace directory in file manager")
 	rootCmd.AddCommand(pathCmd)
+	rootCmd.AddCommand(pwdCmd)
 	rootCmd.AddCommand(codeCmd)
 	rootCmd.AddCommand(cdCmd)
 }

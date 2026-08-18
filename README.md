@@ -63,6 +63,7 @@ Tools:
   slate brief                     Print an agent-facing cheatsheet for this project
   slate open [name]               Open workspace URL in browser
   slate path [name]               Print workspace path (pipeable, --open)
+  slate pwd                       Print the project's main checkout (pipeable)
   slate cd [name]                 Spawn a sub-shell rooted at the workspace dir
   slate code [name]               Open workspace in your editor
   slate shell [name]              Bash shell in app container
