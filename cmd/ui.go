@@ -11,3 +11,11 @@ var (
 func tick() string  { return tickStyle.Render("✔") }
 func cross() string { return crossStyle.Render("✘") }
 func warn() string  { return warnStyle.Render("!") }
+
+// plural picks the singular or plural noun for a count.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}

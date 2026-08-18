@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devtime-ltd/slate/internal/config"
+	"github.com/devtime-ltd/slate/internal/dockernet"
 	"github.com/spf13/cobra"
 )
 
@@ -48,6 +49,10 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	dockerUp := exec.Command("docker", "info").Run() == nil
 	check(dockerUp, "docker daemon running")
+
+	if dockerUp {
+		reportNetworkPools(checkWarn)
+	}
 
 	// HTTPS proxy (slate container > standalone Caddy > Herd)
 	proxyFound := false
@@ -135,4 +140,39 @@ func cmdVersion(name string, args ...string) string {
 		}
 	}
 	return v
+}
+
+// lowNetworkHeadroom is how few creatable networks counts as worth warning
+// about. Every workspace needs one, so running this close means the next
+// `slate new` or two is likely to fail.
+const lowNetworkHeadroom = 3
+
+// reportNetworkPools surfaces Docker's address-pool budget, which is the real
+// ceiling on concurrent workspaces and is invisible until it fails: stock
+// Docker Engine allows 32 networks, OrbStack 30. Idle ones are counted as
+// headroom because `slate down` and a failed `slate up` both reclaim them.
+func reportNetworkPools(checkWarn func(bool, string)) {
+	inUse, capacity, err := dockernet.Pools()
+	if err != nil || capacity == 0 {
+		return
+	}
+
+	idle, _ := dockernet.Idle()
+	label := fmt.Sprintf("docker address pools (%d of %d networks in use", inUse, capacity)
+	if len(idle) > 0 {
+		label += fmt.Sprintf(", %d reclaimable", len(idle))
+	}
+	label += ")"
+
+	free := capacity - inUse + len(idle)
+	checkWarn(free >= lowNetworkHeadroom, label)
+
+	if free < lowNetworkHeadroom {
+		fmt.Println("     Nearly out of networks; the next `slate new` may fail to start.")
+		fmt.Println("     Raise the ceiling with default-address-pools in the Docker daemon config.")
+	}
+	if len(idle) > 0 {
+		fmt.Printf("     %d idle %s can be reclaimed: `slate down` sweeps them, or `docker network prune`.\n",
+			len(idle), plural(len(idle), "network", "networks"))
+	}
 }

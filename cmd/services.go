@@ -13,6 +13,7 @@ import (
 	"github.com/devtime-ltd/slate/internal/assets"
 	"github.com/devtime-ltd/slate/internal/compose"
 	"github.com/devtime-ltd/slate/internal/config"
+	"github.com/devtime-ltd/slate/internal/dockernet"
 	"github.com/devtime-ltd/slate/internal/proxy"
 	"github.com/devtime-ltd/slate/internal/scaffold"
 	"github.com/spf13/cobra"
@@ -120,7 +121,18 @@ func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg co
 		upArgs = append(upArgs, "--build")
 	}
 	if err := compose.Run(env, upArgs...); err != nil {
-		return fmt.Errorf("compose up failed: %w", err)
+		// Docker's address pools cap how many networks can exist at once, and
+		// workspaces stopped outside slate strand theirs. Reclaim those and
+		// retry, but only when something was actually freed, so an unrelated
+		// failure isn't retried for no reason.
+		if freed := dockernet.Reclaim(); len(freed) > 0 {
+			fmt.Printf("Reclaimed %d idle workspace %s; retrying...\n",
+				len(freed), plural(len(freed), "network", "networks"))
+			err = compose.Run(env, upArgs...)
+		}
+		if err != nil {
+			return fmt.Errorf("compose up failed: %w%s", err, networkPoolHint())
+		}
 	}
 
 	if lifecycleScript := scaffold.BuildLifecycleScript(cfg, opts.fresh); lifecycleScript != "" {
