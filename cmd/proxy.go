@@ -14,7 +14,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const proxyContainerName = "slate-proxy"
+// Single source of truth lives in internal/proxy, which needs the name too
+// to decide whether slate may replace a running Caddy config.
+const proxyContainerName = proxy.ProxyContainerName
 const proxyImage = "caddy:2.10"
 
 var proxyCmd = &cobra.Command{
