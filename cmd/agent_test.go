@@ -148,7 +148,7 @@ func runAgentIn(t *testing.T, agent config.AgentCmd, fresh bool) (string, error,
 		t.Fatal(err)
 	}
 	cfg := config.ProjectConfig{Project: "proj", Agent: agent}
-	err := runAgent(cfg, "ws", wsDir, fresh)
+	err := runAgent(cfg, "ws", wsDir, fresh, nil)
 	_, statErr := os.Stat(agentStartedMarker(wsDir))
 	return wsDir, err, statErr == nil
 }
@@ -240,6 +240,208 @@ func TestRunAgentPersistsPendingFirstRun(t *testing.T) {
 	wsDir, _, _ = runAgentIn(t, config.AgentCmd{First: "true", Again: "true"}, false)
 	if agentFresh(wsDir) {
 		t.Error("a failed thereafter launch with no distinct first-run variant should not mark the workspace fresh")
+	}
+}
+
+func TestRunAgentPassesThroughArgs(t *testing.T) {
+	newWs := func() string {
+		t.Helper()
+		wsDir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(wsDir, ".slate"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return wsDir
+	}
+	readArgs := func(wsDir, file string) string {
+		t.Helper()
+		got, err := os.ReadFile(filepath.Join(wsDir, file))
+		if err != nil {
+			t.Fatalf("args never reached the command: %v", err)
+		}
+		return string(got)
+	}
+	agentNoHold = true
+	t.Cleanup(func() { agentNoHold = false })
+	extra := []string{"a", "b c"}
+
+	// touch names its files after its argv, so the created files show
+	// exactly which args reached the command and whether "b c" stayed one.
+	argvFiles := func(wsDir string) {
+		t.Helper()
+		for _, want := range extra {
+			if _, err := os.Stat(filepath.Join(wsDir, want)); err != nil {
+				t.Errorf("arg %q never reached the command as its own argv entry", want)
+			}
+		}
+	}
+
+	// Args land as argv entries, not spliced shell text.
+	t.Setenv("SLATE_AGENT_MIN_RUNTIME", "0")
+	wsDir := newWs()
+	cfg := config.ProjectConfig{Project: "proj", Agent: config.AgentCmd{First: "touch", Again: "touch"}}
+	if err := runAgent(cfg, "ws", wsDir, false, extra); err != nil {
+		t.Fatalf("runAgent: %v", err)
+	}
+	argvFiles(wsDir)
+
+	// A block-scalar `agent: |` decodes with a trailing newline; the args
+	// must still reach the command instead of running as their own line.
+	wsDir = newWs()
+	cfg = config.ProjectConfig{Project: "proj", Agent: config.AgentCmd{First: "touch\n", Again: "touch\n"}}
+	if err := runAgent(cfg, "ws", wsDir, false, extra); err != nil {
+		t.Fatalf("runAgent with trailing newline: %v", err)
+	}
+	argvFiles(wsDir)
+
+	// With shell structure present, an append can land on the wrong
+	// pipeline stage, run as its own command, or vanish into a comment;
+	// refused unless {{ARGS}} pins the placement.
+	for _, compound := range []string{"true &", "true | cat", "true; true", "true 2>&1", "true # note", "(true)", `touch \`} {
+		wsDir = newWs()
+		cfg = config.ProjectConfig{Project: "proj", Agent: config.AgentCmd{First: compound, Again: compound}}
+		if err := runAgent(cfg, "ws", wsDir, false, extra); err == nil || !strings.Contains(err.Error(), "{{ARGS}}") {
+			t.Errorf("want compound command %q refused, got %v", compound, err)
+		}
+	}
+
+	// {{ARGS}} pins where the args land, compound commands included, and the
+	// first-run retry carries the same args.
+	t.Setenv("SLATE_AGENT_MIN_RUNTIME", "0.3")
+	wsDir = newWs()
+	cfg = config.ProjectConfig{Project: "proj", Agent: config.AgentCmd{
+		First: `sleep 0.5; printf '%s\n' {{ARGS}} > first.txt`, Again: "true"}}
+	if err := runAgent(cfg, "ws", wsDir, false, extra); err != nil {
+		t.Fatalf("runAgent: %v", err)
+	}
+	if got := readArgs(wsDir, "first.txt"); got != "a\nb c\n" {
+		t.Errorf("retry argv = %q, want %q", got, "a\nb c\n")
+	}
+
+	// The quoted spellings normalise: "{{ARGS}}" must not degrade into an
+	// unquoted $@ that word-splits, and '{{ARGS}}' must not become a
+	// literal "$@" string that never expands.
+	t.Setenv("SLATE_AGENT_MIN_RUNTIME", "0")
+	for _, spelling := range []string{`touch "{{ARGS}}"`, `touch '{{ARGS}}'`} {
+		wsDir = newWs()
+		cfg = config.ProjectConfig{Project: "proj", Agent: config.AgentCmd{First: spelling, Again: spelling}}
+		if err := runAgent(cfg, "ws", wsDir, false, extra); err != nil {
+			t.Fatalf("runAgent with %q: %v", spelling, err)
+		}
+		argvFiles(wsDir)
+	}
+
+	// {{ARGS}} buried in a longer quoted region or a comment can never
+	// receive the args; refused rather than silently dropping them.
+	for _, dead := range []string{`touch 'review {{ARGS}}'`, `touch "review {{ARGS}}"`, "touch # {{ARGS}}", "touch #{{ARGS}}", "(touch)# {{ARGS}}"} {
+		wsDir = newWs()
+		cfg = config.ProjectConfig{Project: "proj", Agent: config.AgentCmd{First: dead, Again: dead}}
+		if err := runAgent(cfg, "ws", wsDir, false, extra); err == nil || !strings.Contains(err.Error(), "cannot land") {
+			t.Errorf("want dead placeholder %q refused, got %v", dead, err)
+		}
+	}
+
+	// The spliced args don't ride positional parameters, so nothing the
+	// script does to $@ (set --, shift, a function's own scope) loses them,
+	// and quoted function-like text in a prompt is not misread as syntax.
+	t.Setenv("SLATE_AGENT_MIN_RUNTIME", "0")
+	for _, script := range []string{
+		"set -- other; touch {{ARGS}}",
+		"f() { touch {{ARGS}}; }; f",
+		`true 'mentions run()' && touch {{ARGS}}`,
+	} {
+		wsDir = newWs()
+		cfg = config.ProjectConfig{Project: "proj", Agent: config.AgentCmd{First: script, Again: script}}
+		if err := runAgent(cfg, "ws", wsDir, false, extra); err != nil {
+			t.Fatalf("runAgent %q: %v", script, err)
+		}
+		argvFiles(wsDir)
+	}
+
+	// Metacharacters inside quoted arguments don't make a command compound:
+	// its shell-visible structure is still a plain simple command.
+	wsDir = newWs()
+	cfg = config.ProjectConfig{Project: "proj", Agent: config.AgentCmd{
+		First: `touch 'call run(); x#y'`, Again: `touch 'call run(); x#y'`}}
+	if err := runAgent(cfg, "ws", wsDir, false, extra); err != nil {
+		t.Fatalf("runAgent with quoted metacharacters: %v", err)
+	}
+	argvFiles(wsDir)
+
+	// Args containing single quotes survive the splice intact.
+	wsDir = newWs()
+	cfg = config.ProjectConfig{Project: "proj", Agent: config.AgentCmd{First: "touch {{ARGS}}", Again: "touch {{ARGS}}"}}
+	if err := runAgent(cfg, "ws", wsDir, false, []string{"it's here"}); err != nil {
+		t.Fatalf("runAgent with quoted arg: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wsDir, "it's here")); err != nil {
+		t.Error("an arg containing a single quote should survive the splice intact")
+	}
+
+	// A quoted here-document body suppresses expansion, and spotting one
+	// needs a real lexer; the combination is refused outright.
+	wsDir = newWs()
+	heredoc := "cat <<'EOF'\n{{ARGS}}\nEOF"
+	cfg = config.ProjectConfig{Project: "proj", Agent: config.AgentCmd{First: heredoc, Again: heredoc}}
+	if err := runAgent(cfg, "ws", wsDir, false, extra); err == nil || !strings.Contains(err.Error(), "here-document") {
+		t.Errorf("want heredoc + placeholder refused, got %v", err)
+	}
+
+	// {{ARGS}} glued to surrounding text can't keep each arg its own word:
+	// only the first would attach, the rest would run as commands.
+	wsDir = newWs()
+	glued := "PROMPT={{ARGS}} touch ok"
+	cfg = config.ProjectConfig{Project: "proj", Agent: config.AgentCmd{First: glued, Again: glued}}
+	if err := runAgent(cfg, "ws", wsDir, false, extra); err == nil || !strings.Contains(err.Error(), "stand alone") {
+		t.Errorf("want glued placeholder refused, got %v", err)
+	}
+
+	// Hooks are not agent runs: a {{ARGS}} they carry for some downstream
+	// templater passes through untouched, in diagnostics as much as in
+	// execution.
+	wsDir = newWs()
+	if err := runHostCommand(config.ProjectConfig{Project: "proj"}, `touch '{{ARGS}}'`, "ws", wsDir, false); err != nil {
+		t.Fatalf("hook run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wsDir, "{{ARGS}}")); err != nil {
+		t.Error("a hook's literal {{ARGS}} should reach its command untouched")
+	}
+	_, err := runHostCommandDetail(config.ProjectConfig{Project: "proj"}, "nonexistent-cmd-xyz {{ARGS}}", "ws", wsDir, false, nil, false)
+	if err == nil || !strings.Contains(err.Error(), "{{ARGS}}") {
+		t.Errorf("a hook's failure diagnostic should show its literal command, got %v", err)
+	}
+
+	// {{ARGS}} with nothing after -- expands to no words at all.
+	t.Setenv("SLATE_AGENT_MIN_RUNTIME", "0")
+	wsDir = newWs()
+	cfg = config.ProjectConfig{Project: "proj", Agent: config.AgentCmd{
+		First: `printf 'none%s' {{ARGS}} > got.txt`, Again: `printf 'none%s' {{ARGS}} > got.txt`}}
+	if err := runAgent(cfg, "ws", wsDir, false, nil); err != nil {
+		t.Fatalf("runAgent: %v", err)
+	}
+	if got := readArgs(wsDir, "got.txt"); got != "none" {
+		t.Errorf("empty {{ARGS}} argv = %q, want %q", got, "none")
+	}
+}
+
+func TestDisplayCommand(t *testing.T) {
+	if got := displayCommand("claude --continue", nil); got != "claude --continue" {
+		t.Errorf("displayCommand without extra = %q", got)
+	}
+	got := displayCommand("claude", []string{"fix it", "now", ""})
+	if want := `claude 'fix it' 'now' ''`; got != want {
+		t.Errorf("displayCommand = %q, want %q", got, want)
+	}
+	// Args render where {{ARGS}} places them, not appended after the
+	// pipeline, so the diagnostic mirrors what actually executed.
+	got = displayCommand("claude {{ARGS}} | tee log", []string{"hi"})
+	if want := `claude 'hi' | tee log`; got != want {
+		t.Errorf("displayCommand with placeholder = %q, want %q", got, want)
+	}
+	// With no args the placeholder still renders (as nothing), matching
+	// execution, which never runs a literal {{ARGS}}.
+	got = displayCommand("claude {{ARGS}} --continue", nil)
+	if want := `claude  --continue`; got != want {
+		t.Errorf("displayCommand with empty placeholder = %q, want %q", got, want)
 	}
 }
 
