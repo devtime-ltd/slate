@@ -156,17 +156,41 @@ func ResolveWorkspace() (string, string, error) {
 	return ResolveFromCwd()
 }
 
-func CreateWorktree(dir, branch string) error {
-	if out, err := runGit("worktree", "add", dir, "-b", branch); err == nil {
+// CreateWorktree creates dir as a worktree on branch, forking from base when
+// given (the main checkout's current HEAD otherwise). Git runs in mainRoot,
+// not the CWD: invoked from inside another workspace, a CWD-relative default
+// would silently fork from that workspace's HEAD instead.
+func CreateWorktree(mainRoot, dir, branch, base string) error {
+	// Asked directly rather than inferred from `worktree add -b` failure
+	// output, which lumps every "already exists" condition (branch, path)
+	// into one string.
+	if _, err := runGitIn(mainRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+		// The branch already exists - check it out into the worktree. Its
+		// history is set, so a requested base can't be honoured and silently
+		// ignoring it would be worse than refusing.
+		if base != "" {
+			return fmt.Errorf("branch '%s' already exists, so it can't be started from '%s'; drop --base to check the branch out as it is", branch, base)
+		}
+		if out, err := runGitIn(mainRoot, "worktree", "add", dir, branch); err != nil {
+			return fmt.Errorf("git worktree add: %s", strings.TrimSpace(out))
+		}
 		return nil
-	} else if !strings.Contains(out, "already exists") {
-		// fresh branch creation failed for a reason other than "branch exists"
-		return fmt.Errorf("git worktree add: %s", strings.TrimSpace(out))
 	}
 
-	// Branch already exists - check it out into the worktree.
-	if out, err := runGit("worktree", "add", dir, branch); err != nil {
+	args := []string{"worktree", "add", dir, "-b", branch}
+	if base != "" {
+		args = append(args, base)
+	}
+	if out, err := runGitIn(mainRoot, args...); err != nil {
 		return fmt.Errorf("git worktree add: %s", strings.TrimSpace(out))
+	}
+	return nil
+}
+
+// VerifyRef reports whether ref resolves to a commit in the repo at mainRoot.
+func VerifyRef(mainRoot, ref string) error {
+	if _, err := runGitIn(mainRoot, "rev-parse", "--verify", "--quiet", ref+"^{commit}"); err != nil {
+		return fmt.Errorf("'%s' does not resolve to a commit (fetch first for remote-only refs?)", ref)
 	}
 	return nil
 }
@@ -372,11 +396,15 @@ func DeleteBranch(dir, branch string) error {
 }
 
 func runGit(args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
 	// When --project targets a project the user isn't currently sitting in,
 	// run git against that project's checkout instead of the CWD.
-	if mainRootOverride != "" {
-		cmd.Dir = mainRootOverride
+	return runGitIn(mainRootOverride, args...)
+}
+
+func runGitIn(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
 	}
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
