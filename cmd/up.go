@@ -58,7 +58,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
 			if answer == "" || answer == "y" {
-				return createWorkspace(args[0], "", upBg, cd, false, false)
+				return createWorkspace(args[0], "", "", upBg, cd, false, false)
 			}
 			return fmt.Errorf("workspace '%s' not found", args[0])
 		}

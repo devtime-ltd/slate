@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -265,5 +266,75 @@ func TestBranchSafety(t *testing.T) {
 		if safe != c.safe || reason != c.reason {
 			t.Errorf("%s: got (%v, %q), want (%v, %q)", c.branch, safe, reason, c.safe, c.reason)
 		}
+	}
+}
+
+func TestCreateWorktreeBase(t *testing.T) {
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	repo := t.TempDir()
+	git(repo, "init", "-q", "-b", "main")
+	git(repo, "config", "user.email", "t@example.com")
+	git(repo, "config", "user.name", "t")
+	commit := func(file string) string {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, file), []byte(file+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		git(repo, "add", ".")
+		git(repo, "commit", "-qm", file)
+		return git(repo, "rev-parse", "HEAD")
+	}
+	baseSHA := commit("base.txt")
+	commit("later.txt")
+	git(repo, "checkout", "-qb", "unrelated")
+
+	// Git must run in the given mainRoot, not the CWD: from inside another
+	// workspace the CWD's HEAD is the wrong default base.
+	t.Chdir(t.TempDir())
+
+	wt := filepath.Join(t.TempDir(), "based")
+	if err := CreateWorktree(repo, wt, "slate/based", baseSHA); err != nil {
+		t.Fatalf("CreateWorktree with base: %v", err)
+	}
+	if head := git(wt, "rev-parse", "HEAD"); head != baseSHA {
+		t.Errorf("worktree HEAD = %s, want the base %s", head, baseSHA)
+	}
+
+	// The default keeps forking from the main checkout's current HEAD
+	// (branch "unrelated").
+	wt = filepath.Join(t.TempDir(), "headed")
+	if err := CreateWorktree(repo, wt, "slate/headed", ""); err != nil {
+		t.Fatalf("CreateWorktree without base: %v", err)
+	}
+	if head, want := git(wt, "rev-parse", "HEAD"), git(repo, "rev-parse", "unrelated"); head != want {
+		t.Errorf("worktree HEAD = %s, want current HEAD %s", head, want)
+	}
+
+	// An existing branch's history is set: a base must be refused, not
+	// silently ignored.
+	wt = filepath.Join(t.TempDir(), "existing")
+	err := CreateWorktree(repo, wt, "slate/based", baseSHA)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("want an existing branch + base refused, got %v", err)
+	}
+	if err := CreateWorktree(repo, wt, "main", ""); err != nil {
+		t.Errorf("existing branch without base should still check out: %v", err)
+	}
+
+	if err := VerifyRef(repo, baseSHA); err != nil {
+		t.Errorf("VerifyRef(%s): %v", baseSHA, err)
+	}
+	if err := VerifyRef(repo, "no-such-ref"); err == nil {
+		t.Error("want VerifyRef to reject an unknown ref")
 	}
 }

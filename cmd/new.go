@@ -14,6 +14,7 @@ import (
 )
 
 var newBranch string
+var newBase string
 var newBg bool
 var newCd bool
 var newAdopt bool
@@ -29,6 +30,7 @@ var newCmd = &cobra.Command{
 
 func init() {
 	newCmd.Flags().StringVarP(&newBranch, "branch", "b", "", "Git branch name (default: slate/<name>)")
+	newCmd.Flags().StringVar(&newBase, "base", "", "Ref to branch from, e.g. main or origin/main (default: the main checkout's current HEAD)")
 	newCmd.Flags().BoolVar(&newBg, "bg", false, "Run container build + lifecycle in the background")
 	newCmd.Flags().BoolVar(&newCd, "cd", false, "Spawn a shell in the workspace directory (default from global auto_cd; pass --cd=false to opt out)")
 	newCmd.Flags().BoolVar(&newAdopt, "adopt", false, "Carry uncommitted changes from the main checkout into the new worktree")
@@ -39,10 +41,10 @@ func init() {
 }
 
 func runNew(cmd *cobra.Command, args []string) error {
-	return createWorkspace(args[0], newBranch, newBg, resolveAutoCd(cmd, "cd", newCd), newAdopt, newBare)
+	return createWorkspace(args[0], newBranch, newBase, newBg, resolveAutoCd(cmd, "cd", newCd), newAdopt, newBare)
 }
 
-func createWorkspace(name, branch string, bg, cd, adopt, bare bool) error {
+func createWorkspace(name, branch, base string, bg, cd, adopt, bare bool) error {
 	// Bare creation touches only git and generated files; it must work
 	// without Docker installed.
 	if !bare {
@@ -91,8 +93,16 @@ func createWorkspace(name, branch string, bg, cd, adopt, bare bool) error {
 		return fmt.Errorf("creating workspaces dir: %w", err)
 	}
 
-	fmt.Printf("Creating worktree (branch: %s)...\n", branch)
-	if err := workspace.CreateWorktree(wsDir, branch); err != nil {
+	if base != "" {
+		// checked before any worktree mutation so a typo'd ref fails clean
+		if err := workspace.VerifyRef(mainRoot, base); err != nil {
+			return fmt.Errorf("--base %w", err)
+		}
+		fmt.Printf("Creating worktree (branch: %s, from %s)...\n", branch, base)
+	} else {
+		fmt.Printf("Creating worktree (branch: %s)...\n", branch)
+	}
+	if err := workspace.CreateWorktree(mainRoot, wsDir, branch, base); err != nil {
 		return fmt.Errorf("git worktree add failed: %w", err)
 	}
 
