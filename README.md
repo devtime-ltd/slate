@@ -233,6 +233,8 @@ up: tmux new-session -A -s {{HOSTNAME}} 'slate agent'
 
 (`tmux new -A` re-attaches an existing server session, which keeps its original environment, so `SLATE_FRESH` only reaches `slate agent` on the session that created the server.)
 
+`slate agent` passes anything after `--` through to the agent command as extra arguments, appended to whichever variant runs (the first-run retry included): `slate agent myws -- "review the open PR"` runs `claude "review the open PR"` under the example config above. The args are shell-escaped into literal words, so a prompt containing quotes or shell syntax stays a single argument, and nothing the command does to its positional parameters can lose them. Appending is only well-defined for a plain simple command, so an `agent:` containing any shell structure (pipelines, lists, redirects, subshells, comments) is refused when args are passed unless `{{ARGS}}` marks where they belong, e.g. `agent: claude {{ARGS}} | tee agent.log`. `{{ARGS}}` works in simple commands too and expands to nothing when no args are given.
+
 These commands execute on your **host**: your normal claude login, skills, MCPs, and git access all apply. Because of that, `agent`, `new`, and `up` are always read from the **main checkout's** `slate.yml` and never from the workspace copy: the worktree is writable by container code, so a compromised dependency could otherwise edit `slate.yml` and wait for your next slate command. Workspace-side edits to these fields are inert and get a note saying so; land them in the main checkout to take effect. The blast-radius protection stays where it always was, in the containers that run the app and its dependency installs.
 
 ### When the agent command never starts

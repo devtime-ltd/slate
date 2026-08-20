@@ -83,6 +83,21 @@ worktree copy is container-writable and must never drive host execution.
 Workspace-side edits to them are inert and surface a note
 (`config.HostExecPinned`).
 
+`slate agent` splits its args at `ArgsLenAtDash`: at most one positional
+(workspace name) before `--`, everything after passed through to the agent
+command, both variants, the first-run retry included. Args are spliced as
+single-quote-escaped literal words (`shellQuoteAll`), never via `"$@"`
+positional params: the script's own `set --`/`shift` or a function's scope
+would silently replace those. `{{ARGS}}` pins where they land (the exact
+quoted spellings normalise), and `maskQuotedAndComments` walks POSIX quoting
+and comments to refuse a placeholder buried where args can't land (quoted
+text, a comment) plus any here-document, whose body needs a real lexer to
+judge. Without the placeholder, args append only when the command has no
+shell-structure characters at all (`|&;()<>#`, newline, or a trailing
+backslash). Anything structured is refused rather than guessed at, because an
+append can land on the wrong pipeline stage, run as its own command, or
+vanish into a trailing comment.
+
 `slate agent` distrusts a command that returns too fast to have hosted a
 session, because such a command can still exit 0 and so reads as a clean quit:
 `runHostCommandDetail` times the run and `hostRun.bailed()` compares it against

@@ -33,11 +33,30 @@ A command that returns before it could have hosted a session is treated as a
 failed launch rather than a clean exit: slate reports it, leaves a shell in
 the workspace, and doesn't record the entry. Pass --no-hold to exit instead.
 
+Arguments after -- are passed through to the agent command (appended to
+whichever variant runs), e.g.: slate agent myws -- "review the open PR".
+Put {{ARGS}} in the agent: command to control where they land; required
+for anything beyond a plain simple command (pipes, redirects, comments).
+
 Placeholders expanded: {{WORKSPACE}}, {{PROJECT}}, {{HOSTNAME}}.`,
 	GroupID: "tools",
-	Args:    cobra.MaximumNArgs(1),
+	Args: func(cmd *cobra.Command, args []string) error {
+		// only args before -- are positional; everything after passes through
+		positional := len(args)
+		if dash := cmd.ArgsLenAtDash(); dash >= 0 {
+			positional = dash
+		}
+		if positional > 1 {
+			return fmt.Errorf("accepts at most one workspace name before --, got %d", positional)
+		}
+		return nil
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name, wsDir, err := resolveNameOrCwd(args)
+		positional, extra := args, []string(nil)
+		if dash := cmd.ArgsLenAtDash(); dash >= 0 {
+			positional, extra = args[:dash], args[dash:]
+		}
+		name, wsDir, err := resolveNameOrCwd(positional)
 		if err != nil {
 			return err
 		}
@@ -53,7 +72,7 @@ Placeholders expanded: {{WORKSPACE}}, {{PROJECT}}, {{HOSTNAME}}.`,
 		if cfg.Agent.IsZero() {
 			return holdWorkspaceOpen(wsDir, agentUnconfiguredError(mainRoot, wsDir))
 		}
-		return runAgent(cfg, name, wsDir, agentFresh(wsDir))
+		return runAgent(cfg, name, wsDir, agentFresh(wsDir), extra)
 	},
 }
 
@@ -104,13 +123,13 @@ func agentUnconfiguredError(mainRoot, wsDir string) error {
 	return fmt.Errorf("no `agent:` in %s; set a command (e.g. `agent: claude`) or a [first-run, thereafter] pair", mainYml)
 }
 
-func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool) error {
+func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool, extra []string) error {
 	command, variant := cfg.Agent.Again, "thereafter"
 	if fresh {
 		command, variant = cfg.Agent.First, "first-run"
 	}
 
-	run, err := runHostCommandDetail(cfg, command, wsName, wsDir, fresh)
+	run, err := runHostCommandDetail(cfg, command, wsName, wsDir, fresh, extra, true)
 	recordAgentRun(wsDir, variant, run)
 	finalFresh := fresh
 	if err == nil && run.bailed() {
@@ -128,7 +147,7 @@ func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool) error 
 			fmt.Fprintf(os.Stderr, "  %s %v\n", warn(), err)
 			fmt.Fprintln(os.Stderr, "  retrying with the first-run variant")
 			finalFresh = true
-			run, err = runHostCommandDetail(cfg, cfg.Agent.First, wsName, wsDir, true)
+			run, err = runHostCommandDetail(cfg, cfg.Agent.First, wsName, wsDir, true, extra, true)
 			recordAgentRun(wsDir, "first-run", run)
 			if err == nil && run.bailed() {
 				err = agentBailedError(run, "first-run")
@@ -269,17 +288,25 @@ func agentMinRuntime() time.Duration {
 // dir. Ordinary non-zero exits (ctrl-c, `exit 1`) aren't slate failures, but
 // 126 and 127 mean the command itself couldn't run and must be surfaced.
 func runHostCommand(cfg config.ProjectConfig, command, wsName, wsDir string, fresh bool) error {
-	_, err := runHostCommandDetail(cfg, command, wsName, wsDir, fresh)
+	_, err := runHostCommandDetail(cfg, command, wsName, wsDir, fresh, nil, false)
 	return err
 }
 
-func runHostCommandDetail(cfg config.ProjectConfig, command, wsName, wsDir string, fresh bool) (hostRun, error) {
+// agentRun scopes the {{ARGS}}/append processing to `slate agent`: hooks may
+// legitimately carry a literal {{ARGS}} for some downstream templater and must
+// pass through untouched.
+func runHostCommandDetail(cfg config.ProjectConfig, command, wsName, wsDir string, fresh bool, extra []string, agentRun bool) (hostRun, error) {
 	project, err := workspace.ProjectName(cfg.Project)
 	if err != nil {
 		return hostRun{}, err
 	}
 	expanded := expandCommand(command, wsName, project)
 	run := hostRun{command: expanded}
+	if agentRun {
+		// hooks keep their literal text: execution never rewrites them, so
+		// neither may their diagnostics
+		run.command = displayCommand(expanded, extra)
+	}
 	if note := hookNeedsAgentNote(cfg, expanded); note != "" {
 		fmt.Fprintln(os.Stderr, note)
 	}
@@ -292,7 +319,58 @@ func runHostCommandDetail(cfg config.ProjectConfig, command, wsName, wsDir strin
 	if _, alive := readProvisioningLock(wsDir); alive {
 		provisioningEnv = "1"
 	}
-	c := exec.Command("sh", "-c", expanded)
+	// Extra args are single-quote-escaped and spliced in as literal words,
+	// never read back from positional parameters: `"$@"` indirection would
+	// see whatever `set --`, `shift`, or an enclosing function scope left
+	// behind, silently losing the forwarded args. {{ARGS}} in the command
+	// pins where they land (expanding to nothing when no args were given),
+	// but must sit in plain command text: inside quotes the splice would
+	// mangle the quoting, inside a comment it would vanish, and inside a
+	// here-document body slate can't judge intent without a real shell
+	// lexer, so those placements are refused rather than risking a silent
+	// drop. Without the placeholder, args append to the end, which is only
+	// offered when the command verifiably has no shell structure at all:
+	// with structure present the append can land on the wrong pipeline
+	// stage, run as its own command after `&`, or vanish into a trailing
+	// comment. Trailing whitespace is trimmed before appending: a block
+	// scalar `agent: |` decodes with a trailing newline, which would push
+	// the args onto their own shell line.
+	const argsPlaceholder = "{{ARGS}}"
+	shellArgs := []string{"-c", expanded}
+	trimmed := strings.TrimRight(expanded, " \t\r\n")
+	switch {
+	case !agentRun:
+	case strings.Contains(expanded, argsPlaceholder):
+		// the exact quoted spellings are a natural way to write it and
+		// normalise to the same splice
+		script := strings.ReplaceAll(expanded, `'`+argsPlaceholder+`'`, argsPlaceholder)
+		script = strings.ReplaceAll(script, `"`+argsPlaceholder+`"`, argsPlaceholder)
+		masked := maskQuotedAndComments(script)
+		if strings.Count(masked, argsPlaceholder) != strings.Count(script, argsPlaceholder) {
+			return hostRun{}, fmt.Errorf(`{{ARGS}} sits where args cannot land (quoted text or a comment); move it into plain command text: %s`, displayCommand(expanded, extra))
+		}
+		// Each arg is forwarded as its own word, so a placeholder glued to
+		// surrounding text (PROMPT={{ARGS}}) would attach only the first arg
+		// and set the rest loose as commands of their own.
+		if !placeholderStandalone(script) {
+			return hostRun{}, fmt.Errorf(`{{ARGS}} must stand alone as its own shell word; each forwarded arg becomes a separate word, so it can't be glued to surrounding text: %s`, displayCommand(expanded, extra))
+		}
+		if strings.Contains(masked, "<<") {
+			return hostRun{}, fmt.Errorf(`{{ARGS}} can't be checked around a here-document; restructure the agent command without <<: %s`, displayCommand(expanded, extra))
+		}
+		shellArgs = []string{"-c", strings.ReplaceAll(script, argsPlaceholder, shellQuoteAll(extra))}
+	case len(extra) == 0:
+	// classified on the masked text so metacharacters inside quoted
+	// arguments (a prompt mentioning "run()") don't refuse a command whose
+	// shell-visible structure is plainly simple
+	case strings.ContainsAny(maskQuotedAndComments(trimmed), "|&;()<>#\n") || oddTrailingBackslashes(trimmed):
+		// A trailing unquoted backslash would consume the separator and glue
+		// the first appended arg onto the command's last word.
+		return hostRun{}, fmt.Errorf("the agent command isn't a plain simple command, so appended args could land in the wrong place; put {{ARGS}} where they belong: %s", displayCommand(expanded, extra))
+	default:
+		shellArgs = []string{"-c", trimmed + " " + shellQuoteAll(extra)}
+	}
+	c := exec.Command("sh", shellArgs...)
 	c.Dir = wsDir
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
@@ -312,7 +390,7 @@ func runHostCommandDetail(cfg config.ProjectConfig, command, wsName, wsDir strin
 		if errors.As(err, &ee) {
 			run.exitCode = ee.ExitCode()
 			if run.exitCode == 126 || run.exitCode == 127 {
-				return run, fmt.Errorf("command failed (exit %d, not found/executable?): %s", run.exitCode, expanded)
+				return run, fmt.Errorf("command failed (exit %d, not found/executable?): %s", run.exitCode, run.command)
 			}
 			return run, nil
 		}
@@ -322,6 +400,105 @@ func runHostCommandDetail(cfg config.ProjectConfig, command, wsName, wsDir strin
 		return run, err
 	}
 	return run, nil
+}
+
+// maskQuotedAndComments blanks quoted spans, escaped characters, and comments
+// to spaces, leaving only plain command text, so callers can check what truly
+// sits at the shell's top level. The walk follows POSIX rules: '...' spans
+// take no escapes, backslash escapes the next character elsewhere, and #
+// opens a comment only at the start of a word.
+func maskQuotedAndComments(script string) string {
+	masked := []byte(script)
+	state := byte(0) // 0 plain, '\'' single, '"' double, '#' comment
+	for i := 0; i < len(script); i++ {
+		c := script[i]
+		if state == '#' {
+			if c == '\n' {
+				state = 0
+			} else {
+				masked[i] = ' '
+			}
+			continue
+		}
+		if state != '\'' && c == '\\' {
+			masked[i] = ' '
+			if i+1 < len(script) {
+				masked[i+1] = ' '
+			}
+			i++
+			continue
+		}
+		switch {
+		case state == 0 && c == '#' && (i == 0 || strings.IndexByte(" \t\n;|&()<>}", script[i-1]) >= 0):
+			// the marker survives masking so classifiers can still see a
+			// comment exists; only its content is blanked
+			state = '#'
+		case state == 0 && (c == '\'' || c == '"'):
+			state = c
+			masked[i] = ' '
+		case state == c:
+			state = 0
+			masked[i] = ' '
+		case state != 0:
+			masked[i] = ' '
+		}
+	}
+	return string(masked)
+}
+
+// placeholderStandalone reports whether every {{ARGS}} occurrence is bounded
+// by whitespace, an operator, or the string's ends, i.e. is a whole shell
+// word rather than a fragment of one.
+func placeholderStandalone(script string) bool {
+	const ph = "{{ARGS}}"
+	const boundary = " \t\n|;&()<>"
+	for i := 0; ; {
+		j := strings.Index(script[i:], ph)
+		if j < 0 {
+			return true
+		}
+		j += i
+		if j > 0 && strings.IndexByte(boundary, script[j-1]) < 0 {
+			return false
+		}
+		i = j + len(ph)
+		if i < len(script) && strings.IndexByte(boundary, script[i]) < 0 {
+			return false
+		}
+	}
+}
+
+func oddTrailingBackslashes(s string) bool {
+	return (len(s)-len(strings.TrimRight(s, `\`)))%2 == 1
+}
+
+// shellQuoteAll renders args as single-quoted shell words, the only POSIX
+// quoting with no expansions left inside; embedded quotes use the '\''
+// close-escape-reopen idiom.
+func shellQuoteAll(args []string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+	}
+	return strings.Join(quoted, " ")
+}
+
+// displayCommand is what errors and the agent-last-run breadcrumb show for a
+// run: the expanded command with any passed-through args rendered where they
+// actually land, at {{ARGS}} when the command places them, appended otherwise,
+// shell-quoted the same way execution splices them.
+func displayCommand(expanded string, extra []string) string {
+	script := strings.ReplaceAll(expanded, `'{{ARGS}}'`, "{{ARGS}}")
+	script = strings.ReplaceAll(script, `"{{ARGS}}"`, "{{ARGS}}")
+	if strings.Contains(script, "{{ARGS}}") {
+		// rendered even with no args, matching execution, which never runs
+		// a literal placeholder
+		return strings.ReplaceAll(script, "{{ARGS}}", shellQuoteAll(extra))
+	}
+	if len(extra) == 0 {
+		return expanded
+	}
+	return expanded + " " + shellQuoteAll(extra)
 }
 
 // hookNeedsAgentNote catches a `new:`/`up:` hook reaching for an `agent:` that
