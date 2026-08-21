@@ -248,6 +248,8 @@ An agent command that returns straight away hasn't hosted a session, whatever it
 - it records every run's outcome (timestamp, variant, exit code, duration, command) in the workspace's `.slate/agent-last-run`, so even a launch that takes its tmux session down leaves evidence;
 - at a terminal it leaves a shell in the workspace instead of returning, so a tmux session wrapping `slate agent` survives with the diagnostic on screen. `slate agent --no-hold` exits instead, as does any non-interactive invocation.
 
+A session that started (outlived the floor) but ended with a plain non-zero exit gets the same held shell: claude exits 0 from a normal quit and a signal death is you stopping it, so a non-zero end is a crash whose output would otherwise vanish with the tmux session. The agent-started marker is still recorded, because the session existed and the next entry should continue it rather than start over.
+
 Set `SLATE_AGENT_MIN_RUNTIME` (seconds, `0` disables the check) if your `agent:` legitimately hands off and returns at once.
 
 A `new:`/`up:` hook that runs `slate agent` when no `agent:` is configured gets a warning before the hook fires, rather than failing invisibly inside the hook's own process.
