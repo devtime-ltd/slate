@@ -481,13 +481,9 @@ func TestWriteWorkspaceMarkerRefusesSymlinks(t *testing.T) {
 func TestRunAgentLeavesBreadcrumb(t *testing.T) {
 	t.Setenv("SLATE_AGENT_MIN_RUNTIME", "0")
 
-	// The vanish shape: the agent exits outside the bail window, slate
-	// returns cleanly, and the enclosing tmux session dies. The breadcrumb
-	// is the only evidence left in the workspace.
-	wsDir, err, _ := runAgentIn(t, config.AgentCmd{First: "exit 1", Again: "exit 1"}, false)
-	if err != nil {
-		t.Fatalf("an ordinary non-zero exit is not a slate failure, got %v", err)
-	}
+	// The agent exits outside the bail window: the breadcrumb records the
+	// run whatever else happens to the session.
+	wsDir, _, _ := runAgentIn(t, config.AgentCmd{First: "exit 1", Again: "exit 1"}, false)
 	got, readErr := os.ReadFile(filepath.Join(wsDir, ".slate", "agent-last-run"))
 	if readErr != nil {
 		t.Fatalf("want a breadcrumb recording the run: %v", readErr)
@@ -496,5 +492,41 @@ func TestRunAgentLeavesBreadcrumb(t *testing.T) {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("breadcrumb %q missing %q", got, want)
 		}
+	}
+}
+
+func TestRunAgentHoldsOnCrashedSession(t *testing.T) {
+	t.Setenv("SLATE_AGENT_MIN_RUNTIME", "0.3")
+
+	// The vanish shape: the session outlives the launch floor, then ends
+	// with a plain non-zero exit. That is a crash, not a quit, and slate
+	// must not return cleanly and take the tmux session with it.
+	_, err, marked := runAgentIn(t, config.AgentCmd{First: "sleep 0.5; exit 7", Again: "sleep 0.5; exit 7"}, false)
+	if err == nil || !strings.Contains(err.Error(), "ended with exit 7") {
+		t.Errorf("want a crashed session surfaced, got %v", err)
+	}
+	if !marked {
+		t.Error("a crashed session still existed; the next entry should continue it")
+	}
+
+	// A crash in the first-run retry is attributed to the variant that
+	// actually ran, not the thereafter variant that bailed before it.
+	_, err, _ = runAgentIn(t, config.AgentCmd{First: "sleep 0.5; exit 7", Again: "true"}, false)
+	if err == nil || !strings.Contains(err.Error(), "the first-run agent session ended with exit 7") {
+		t.Errorf("want the crash attributed to the retried first-run variant, got %v", err)
+	}
+
+	// A signal death is the user stopping the session: clean teardown.
+	_, err, marked = runAgentIn(t, config.AgentCmd{First: "sleep 0.5; kill -TERM $$", Again: "sleep 0.5; kill -TERM $$"}, false)
+	if err != nil {
+		t.Errorf("a signal death should tear down cleanly, got %v", err)
+	}
+	if !marked {
+		t.Error("a signal-stopped session still existed and should be recorded")
+	}
+
+	// A clean exit stays a clean exit.
+	if _, err, _ := runAgentIn(t, config.AgentCmd{First: "sleep 0.5", Again: "sleep 0.5"}, false); err != nil {
+		t.Errorf("a clean quit should not be held, got %v", err)
 	}
 }

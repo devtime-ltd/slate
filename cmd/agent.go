@@ -147,10 +147,11 @@ func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool, extra 
 			fmt.Fprintf(os.Stderr, "  %s %v\n", warn(), err)
 			fmt.Fprintln(os.Stderr, "  retrying with the first-run variant")
 			finalFresh = true
+			variant = "first-run"
 			run, err = runHostCommandDetail(cfg, cfg.Agent.First, wsName, wsDir, true, extra, true)
-			recordAgentRun(wsDir, "first-run", run)
+			recordAgentRun(wsDir, variant, run)
 			if err == nil && run.bailed() {
-				err = agentBailedError(run, "first-run")
+				err = agentBailedError(run, variant)
 			}
 		}
 	}
@@ -167,6 +168,16 @@ func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool, extra 
 	_ = removeWorkspaceMarker(wsDir, "agent-first-run-pending")
 	warnOnMarkerError("the next entry will re-run the first-run variant over this workspace",
 		writeWorkspaceMarker(wsDir, "agent-started", nil))
+	// A session that outlived the launch floor but ended with a plain
+	// non-zero exit crashed rather than quit: claude exits 0 from a normal
+	// quit, and a signal death (-1, >128) is the user stopping it. Returning
+	// would take the enclosing tmux session, and the crash output with it.
+	// The agent-started marker stays written: the session existed, so the
+	// next entry rightly continues it.
+	if run.exitCode > 0 && run.exitCode <= 128 {
+		return holdWorkspaceOpen(wsDir, fmt.Errorf("the %s agent session ended with exit %d after %s; holding the workspace so the failure output survives: %s",
+			variant, run.exitCode, run.elapsed.Round(time.Second), run.command))
+	}
 	return nil
 }
 
@@ -212,9 +223,10 @@ func removeWorkspaceMarker(wsDir, name string) error {
 	return unix.Unlinkat(int(dir.Fd()), name, 0)
 }
 
-// recordAgentRun drops each agent run's outcome into the workspace. An agent
-// exit outside the bail window returns cleanly and takes any enclosing tmux
-// session with it, so this file is the only evidence of what happened.
+// recordAgentRun drops each agent run's outcome into the workspace. A clean
+// quit or a signal death still returns and takes any enclosing tmux session
+// with it, so for those shapes this file is the only evidence of what
+// happened.
 func recordAgentRun(wsDir, variant string, run hostRun) {
 	if run.command == "" {
 		return

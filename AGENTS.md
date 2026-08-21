@@ -112,9 +112,13 @@ first-run one once (the stale `claude --continue` shape: it presumed a session
 the workspace hasn't got, and exits 0 or 1 depending on the claude build);
 signal deaths and 126/127 don't retry, the first being the launch stopped from
 outside, the second a config problem whose surfaced error a retry would mask. Every run's outcome lands in the
-workspace's `.slate/agent-last-run` (`recordAgentRun`), because an exit outside
-the bail window returns cleanly and takes any enclosing tmux session with it,
-leaving no other evidence. All host-side `.slate` marker writes and removals go
+workspace's `.slate/agent-last-run` (`recordAgentRun`). An exit outside the
+bail window is a clean quit only when its code says so: a plain non-zero exit
+(1-128) after the floor is a crashed session and holds the workspace open with
+the code, duration and command, while exit 0 and signal deaths (the user
+quitting or stopping it) still tear down normally; the agent-started marker is
+written either way, because the session existed and the next entry should
+continue it. All host-side `.slate` marker writes and removals go
 through a pinned directory fd (`openSlateDir`: O_NOFOLLOW, then
 openat/unlinkat that never re-walk the path), because the worktree is
 container-writable and a planted or concurrently-swapped link could otherwise
