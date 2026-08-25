@@ -149,7 +149,7 @@ Each workspace uses the `slate.yml` in its **own worktree** when present, so a b
 
 - `project:` is always taken from the main checkout so a branch can't change the workspace's identity (hostname, compose project, database names).
 - `agent:`, `new:`, and `up:` run on the host and only ever come from the main checkout (see [Agent](#agent--new--up-what-newup-drop-you-into)).
-- `scaffold:`, `files:`, `database:`, and `env:` (the latter two interpolate into compose files) can reach host resources, so they come from **committed content on the workspace branch** (containers can't commit; the `.git` mount is read-only) or, when the branch doesn't commit a `slate.yml`, from the main checkout. Uncommitted worktree edits to them are inert and get a note; commit them on the branch to test. This keeps a rewritten worktree config (e.g. by a compromised dependency) from mounting host files into containers on your next `slate up`.
+- `scaffold:`, `files:`, `database:`, `env:`, `node_image:`, `apt_packages:`, `php_extensions:`, and `php_ini:` (`database`/`env` interpolate into compose files; `node_image` picks the image a container runs; `apt_packages`/`php_extensions`/`php_ini` become root build steps in its Dockerfile) can reach host resources, so they come from **committed content on the workspace branch** (containers can't commit; the `.git` mount is read-only) or, when the branch doesn't commit a `slate.yml`, from the main checkout. Uncommitted worktree edits to them are inert and get a note; commit them on the branch to test. This keeps a rewritten worktree config (e.g. by a compromised dependency) from mounting host files into containers, running an image of its choosing, or baking commands into that image, on your next `slate up`.
 
 Heavier changes like swapping `scaffold:` usually want `slate up --fresh`.
 
@@ -164,6 +164,17 @@ project: my-project
 # Extra packages for the Docker image
 apt_packages: [ghostscript, imagemagick, libmagickwand-dev]
 php_extensions: [imagick]
+
+# Node image for the vite (laravel) / app (nextjs) container.
+# Defaults: node:24 (laravel), node:24-slim (nextjs). Pin one whose bundled npm
+# satisfies package.json's engines.npm - a mismatched npm rewrites the lockfile
+# to its own resolution on every container start.
+# Host-reaching, so like scaffold/files/database/env it is read from committed
+# content on the branch, not the working copy. On the laravel vite service this
+# is an `image:` and takes effect on the next `slate up`; on the nextjs app
+# service (and for apt_packages / php_extensions / php_ini, which build into the
+# Dockerfile) an existing workspace picks the change up on `slate up --build`.
+# node_image: node:22
 
 # PHP ini overrides (laravel). Defaults: memory_limit=512M, upload/post 100M.
 php_ini:
@@ -268,7 +279,7 @@ Slate is designed to be driven by an LLM running on the host:
 | Scaffold | Stack | Services |
 |----------|-------|----------|
 | `laravel` | PHP 8.3 + Apache, MySQL, Vite, Mailpit | app, queue, mysql, vite, mailpit |
-| `nextjs` | Node 22, PostgreSQL, Mailpit | app, postgres, mailpit |
+| `nextjs` | Node 24, PostgreSQL, Mailpit | app, postgres, mailpit |
 | [inline](#inline-scaffolds) | Bring your own compose file | User-defined |
 
 ### Inline scaffolds

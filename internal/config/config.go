@@ -162,6 +162,21 @@ func (a AgentCmd) IsZero() bool {
 	return a.First == "" && a.Again == ""
 }
 
+func (c ProjectConfig) String(key string) string {
+	val, ok := c.Extra[key]
+	if !ok {
+		return ""
+	}
+	switch v := val.(type) {
+	case string:
+		return v
+	case int, int64, float64, bool:
+		return fmt.Sprint(v)
+	default:
+		return ""
+	}
+}
+
 func (c ProjectConfig) StringMap(key string) map[string]string {
 	val, ok := c.Extra[key]
 	if !ok {
@@ -339,6 +354,14 @@ func LoadProject(dir string) (ProjectConfig, error) {
 	return cfg, nil
 }
 
+// PinnedExtraKeys are the host-reaching keys that live in Extra rather than a
+// named field. Each decides what a container is or runs, so like scaffold and
+// env it must come from committed config, never the container-writable
+// worktree: files mounts host paths in, node_image picks the image, and
+// apt_packages/php_extensions/php_ini are spliced into the image's Dockerfile
+// as root build steps.
+var PinnedExtraKeys = []string{"files", "node_image", "apt_packages", "php_extensions", "php_ini"}
+
 // LoadProjectForWorkspace prefers the worktree's slate.yml so a branch can
 // test config changes. `project:` stays pinned to the main checkout, as do
 // the host-executed `agent`/`up`: the worktree is container-writable, so
@@ -372,18 +395,21 @@ func LoadProjectForWorkspace(mainRoot, wsDir string) (ProjectConfig, error) {
 	// slate.yml is missing: container code can delete the file, and that must
 	// not flip the trusted resolution away from the branch's committed config.
 	trusted := trustedConfig(mainRoot, wsDir, mainCfg)
-	trustedFiles, hasFiles := trusted.Extra["files"]
 	cfg.Scaffold = trusted.Scaffold
 	cfg.Database = trusted.Database
 	cfg.Env = trusted.Env
-	if cfg.Extra != nil {
-		delete(cfg.Extra, "files")
-	}
-	if hasFiles {
+	for _, key := range PinnedExtraKeys {
+		val, ok := trusted.Extra[key]
+		if cfg.Extra != nil {
+			delete(cfg.Extra, key)
+		}
+		if !ok {
+			continue
+		}
 		if cfg.Extra == nil {
 			cfg.Extra = map[string]any{}
 		}
-		cfg.Extra["files"] = trustedFiles
+		cfg.Extra[key] = val
 	}
 	return cfg, nil
 }
@@ -435,8 +461,10 @@ func TrustPinned(mainRoot, wsDir string) []string {
 	if !reflect.DeepEqual(wsCfg.Env, trusted.Env) {
 		pinned = append(pinned, "env")
 	}
-	if !reflect.DeepEqual(wsCfg.Extra["files"], trusted.Extra["files"]) {
-		pinned = append(pinned, "files")
+	for _, key := range PinnedExtraKeys {
+		if !reflect.DeepEqual(wsCfg.Extra[key], trusted.Extra[key]) {
+			pinned = append(pinned, key)
+		}
 	}
 	return pinned
 }

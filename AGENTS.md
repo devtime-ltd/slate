@@ -138,10 +138,11 @@ containers. A stale `.failed` marker deliberately doesn't block those
 commands (debugging a half-provisioned workspace is legitimate); only a live
 or died-in-flight provision does.
 
-Related trust rule: `scaffold:`, `files:`, `database:`, and `env:`
-(host-reaching config: they can mount host files, define containers, or
-interpolate into compose files, env via the `--env-file` role of
-.env.container) resolve from the workspace branch's
+Related trust rule: `scaffold:`, `files:`, `database:`, `env:`, `node_image:`,
+`apt_packages:`, `php_extensions:`, and `php_ini:` (host-reaching config: they
+can mount host files, choose or define containers, interpolate into compose
+files via the `--env-file` role of .env.container, or become root build steps
+in a container's Dockerfile) resolve from the workspace branch's
 committed slate.yml via the main .git (`workspace.CommittedFile`; containers
 can't commit because the .git mount is read-only), falling back to the main
 checkout. The worktree's working copy is never trusted for them

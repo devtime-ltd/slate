@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/devtime-ltd/slate/internal/config"
+	"github.com/devtime-ltd/slate/scaffolds"
 )
 
 func TestBuildLifecycleScriptUpOnly(t *testing.T) {
@@ -405,12 +406,15 @@ func TestGenerateFileMountsRefusesSymlinkedSlateDir(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(ws, ".slate")); err != nil {
 		t.Fatal(err)
 	}
+	victim := filepath.Join(target, "compose.files.yaml")
 	cfg := config.ProjectConfig{Extra: map[string]any{
 		"files": map[string]any{src: "/etc/foo"},
 	}}
-	err := GenerateFileMounts(ws, cfg, &nullScaffold{}, []string{"app", "queue"})
-	if err == nil || !strings.Contains(err.Error(), "symlink") {
-		t.Errorf("expected symlink refusal, got %v", err)
+	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}, []string{"app", "queue"}); err == nil {
+		t.Error("a symlinked .slate must be refused")
+	}
+	if _, err := os.Lstat(victim); err == nil {
+		t.Error("write reached the symlink target dir")
 	}
 }
 
@@ -426,9 +430,15 @@ func TestGenerateFileMountsRefusesSymlinkedFilesDir(t *testing.T) {
 	cfg := config.ProjectConfig{Extra: map[string]any{
 		"files": map[string]any{src: "/etc/foo"},
 	}}
-	err := GenerateFileMounts(ws, cfg, &nullScaffold{}, []string{"app", "queue"})
-	if err == nil || !strings.Contains(err.Error(), "symlink") {
-		t.Errorf("expected symlink refusal for .slate/files, got %v", err)
+	if err := GenerateFileMounts(ws, cfg, &nullScaffold{}, []string{"app", "queue"}); err != nil {
+		t.Fatalf("a symlinked .slate/files should be replaced, not error: %v", err)
+	}
+	// the symlink was removed (not followed) and a real dir created in its place
+	if entries, _ := os.ReadDir(target); len(entries) != 0 {
+		t.Error("write reached the symlink target dir")
+	}
+	if info, err := os.Lstat(filepath.Join(ws, ".slate/files")); err != nil || !info.IsDir() {
+		t.Errorf(".slate/files should be a real directory now: %v", err)
 	}
 }
 
@@ -671,5 +681,209 @@ func TestGenerateEnvContainerKeepsProjectAppKey(t *testing.T) {
 	}
 	if out := envContainerFor(t, mainRoot); strings.Contains(out, "APP_KEY=") {
 		t.Errorf(".env.container must not override the project's own APP_KEY:\n%s", out)
+	}
+}
+
+func renderLaravelCompose(t *testing.T, cfg config.ProjectConfig) string {
+	t.Helper()
+	raw, err := scaffolds.Laravel.ReadFile("laravel/compose.yaml.tmpl")
+	if err != nil {
+		t.Fatalf("reading embedded laravel compose: %v", err)
+	}
+	out, err := renderCompose(string(raw), "", cfg, Identity{Project: "p", Workspace: "w", Hostname: "p--w.test"})
+	if err != nil {
+		t.Fatalf("renderCompose failed: %v", err)
+	}
+	return out
+}
+
+func TestLaravelComposeDefaultsNodeImage(t *testing.T) {
+	out := renderLaravelCompose(t, config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "laravel"}})
+	if !strings.Contains(out, `image: "`+defaultNodeImage+`"`+"\n") {
+		t.Errorf("vite service should default to %s:\n%s", defaultNodeImage, out)
+	}
+}
+
+func TestLaravelComposeNodeImageOverride(t *testing.T) {
+	cfg := config.ProjectConfig{
+		Scaffold: config.ScaffoldRef{Name: "laravel"},
+		Extra:    map[string]any{"node_image": "node:22"},
+	}
+	out := renderLaravelCompose(t, cfg)
+	if !strings.Contains(out, `image: "node:22"`+"\n") {
+		t.Errorf("node_image not applied to vite service:\n%s", out)
+	}
+	if strings.Contains(out, `image: "`+defaultNodeImage+`"`+"\n") {
+		t.Errorf("default node image should be gone when overridden:\n%s", out)
+	}
+}
+
+func TestNextjsDockerfileNodeImageOverride(t *testing.T) {
+	s, err := Get("nextjs")
+	if err != nil {
+		t.Fatalf("Get(nextjs) failed: %v", err)
+	}
+	raw, err := scaffolds.NextJS.ReadFile("nextjs/Dockerfile.tmpl")
+	if err != nil {
+		t.Fatalf("reading embedded nextjs Dockerfile: %v", err)
+	}
+	if !strings.HasPrefix(string(raw), "FROM "+nextjsNodeImage+"\n") {
+		t.Fatalf("nextjsNodeImage must match the template's FROM line, else the override no-ops")
+	}
+	base := "FROM " + nextjsNodeImage + "\n\nRUN corepack enable\n"
+
+	unset, err := s.(embeddedScaffold).RenderDockerfile(base, config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "nextjs"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unset != base {
+		t.Errorf("Dockerfile should be untouched without node_image:\n%s", unset)
+	}
+
+	cfg := config.ProjectConfig{
+		Scaffold: config.ScaffoldRef{Name: "nextjs"},
+		Extra:    map[string]any{"node_image": "node:22-slim"},
+	}
+	out, err := s.(embeddedScaffold).RenderDockerfile(base, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "FROM node:22-slim\n") {
+		t.Errorf("node_image not applied to FROM line:\n%s", out)
+	}
+	if !strings.Contains(out, "RUN corepack enable") {
+		t.Errorf("rest of the Dockerfile should survive:\n%s", out)
+	}
+}
+
+func TestLaravelComposeRejectsInjectingNodeImage(t *testing.T) {
+	raw, err := scaffolds.Laravel.ReadFile("laravel/compose.yaml.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.ProjectConfig{
+		Scaffold: config.ScaffoldRef{Name: "laravel"},
+		Extra: map[string]any{
+			"node_image": "node:24\n    volumes:\n      - ${HOME}/.ssh:/loot",
+		},
+	}
+	if _, err := renderCompose(string(raw), "", cfg, Identity{Project: "p", Workspace: "w"}); err == nil {
+		t.Fatal("a node_image carrying newlines must be rejected, not rendered into compose")
+	}
+}
+
+func TestNodeImageRejectsUnsafeValues(t *testing.T) {
+	for _, bad := range []string{
+		"node:24\nfoo: bar",
+		"node:24 extra",
+		`node:24"`,
+		"${EVIL}",
+		"-node:24",
+	} {
+		cfg := config.ProjectConfig{Extra: map[string]any{"node_image": bad}}
+		if _, err := nodeImage(cfg, defaultNodeImage); err == nil {
+			t.Errorf("node_image %q should be rejected", bad)
+		}
+	}
+	for _, ok := range []string{
+		"node:24",
+		"node:24-slim",
+		"registry.example.com:5000/team/node:24",
+		"[2001:db8::1]:5000/team/node:24",
+		"registry.example.com:5000/" + strings.Repeat("a", 255) + ":sometag",
+		"node@sha256:" + strings.Repeat("a", 64),
+	} {
+		cfg := config.ProjectConfig{Extra: map[string]any{"node_image": ok}}
+		if got, err := nodeImage(cfg, defaultNodeImage); err != nil || got != ok {
+			t.Errorf("node_image %q should be accepted, got %q err=%v", ok, got, err)
+		}
+	}
+}
+
+func TestGenerateRenderErrorWritesNoGeneratedFiles(t *testing.T) {
+	ws, mainRoot := t.TempDir(), t.TempDir()
+	id := Identity{Project: "p", Workspace: "w", Hostname: "p--w"}
+
+	if err := Generate(ws, mainRoot, config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "laravel"}}, id); err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := filepath.Join(ws, ".slate", "Dockerfile")
+	composeFile := filepath.Join(ws, ".slate", "compose.yaml")
+	prevDockerfile, err := os.ReadFile(dockerfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevCompose, err := os.ReadFile(composeFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// apt_packages changes the Dockerfile; the invalid node_image fails the
+	// compose render, which happens after the Dockerfile render
+	cfg := config.ProjectConfig{
+		Scaffold: config.ScaffoldRef{Name: "laravel"},
+		Extra: map[string]any{
+			"apt_packages": []any{"ghostscript"},
+			"node_image":   "not a valid image",
+		},
+	}
+	if err := Generate(ws, mainRoot, cfg, id); err == nil {
+		t.Fatal("an invalid node_image must fail the generate")
+	}
+	if got, _ := os.ReadFile(dockerfile); string(got) != string(prevDockerfile) {
+		t.Error("a render error later in the file list must not have written the changed Dockerfile first")
+	}
+	if got, _ := os.ReadFile(composeFile); string(got) != string(prevCompose) {
+		t.Error("compose.yaml must be untouched after a render error")
+	}
+}
+
+func TestGenerateRefusesSymlinkedGeneratedFile(t *testing.T) {
+	ws, mainRoot := t.TempDir(), t.TempDir()
+	cfg := config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "nextjs"}}
+	id := Identity{Project: "p", Workspace: "w", Hostname: "p--w"}
+	if err := Generate(ws, mainRoot, cfg, id); err != nil {
+		t.Fatal(err)
+	}
+
+	// a hostile worktree plants a symlink where a generated file is written
+	victim := filepath.Join(ws, "host-secret")
+	if err := os.WriteFile(victim, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(ws, ".slate", "compose.yaml")
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, target); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Generate(ws, mainRoot, cfg, id); err == nil {
+		t.Error("Generate must refuse to write through a planted symlink")
+	}
+	if got, _ := os.ReadFile(victim); string(got) != "keep me" {
+		t.Errorf("the symlink target was clobbered: %q", got)
+	}
+}
+
+func TestGenerateRefusesSymlinkedSlateDir(t *testing.T) {
+	ws, mainRoot := t.TempDir(), t.TempDir()
+	elsewhere := t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(ws, ".slate")); err != nil {
+		t.Fatal(err)
+	}
+	err := Generate(ws, mainRoot, config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "nextjs"}}, Identity{})
+	if err == nil {
+		t.Error("Generate must refuse a symlinked .slate")
+	}
+}
+
+func TestNodeImageRejectsNonStringYAML(t *testing.T) {
+	for _, raw := range []any{true, 24, 3.14} {
+		cfg := config.ProjectConfig{Extra: map[string]any{"node_image": raw}}
+		if _, err := nodeImage(cfg, defaultNodeImage); err == nil {
+			t.Errorf("node_image %v (%T) should be rejected as non-string", raw, raw)
+		}
 	}
 }
