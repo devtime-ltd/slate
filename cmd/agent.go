@@ -9,13 +9,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/devtime-ltd/slate/internal/config"
+	"github.com/devtime-ltd/slate/internal/safeio"
 	"github.com/devtime-ltd/slate/internal/workspace"
 	"github.com/spf13/cobra"
-	"golang.org/x/sys/unix"
 )
 
 var agentNoHold bool
@@ -189,38 +188,25 @@ func warnOnMarkerError(consequence string, err error) {
 	}
 }
 
-// openSlateDir pins the workspace's real .slate directory. The worktree,
-// .slate included, is container-writable, so every host-side marker operation
-// goes through this fd: O_NOFOLLOW refuses a link planted in the directory's
-// place, and *at syscalls on the fd never re-walk the path, so a concurrent
-// swap can't redirect them to files outside the workspace.
-func openSlateDir(wsDir string) (*os.File, error) {
-	return os.OpenFile(filepath.Join(wsDir, ".slate"), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
-}
-
+// The workspace marker helpers write into the container-writable .slate dir
+// through safeio's pinned-fd primitives, so a concurrent path swap can't
+// redirect them to a host file.
 func writeWorkspaceMarker(wsDir, name string, data []byte) error {
-	dir, err := openSlateDir(wsDir)
+	dir, err := safeio.OpenDir(filepath.Join(wsDir, ".slate"))
 	if err != nil {
 		return err
 	}
 	defer dir.Close()
-	fd, err := unix.Openat(int(dir.Fd()), name, unix.O_WRONLY|unix.O_CREAT|unix.O_TRUNC|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o644)
-	if err != nil {
-		return err
-	}
-	f := os.NewFile(uintptr(fd), name)
-	defer f.Close()
-	_, err = f.Write(data)
-	return err
+	return safeio.WriteFileAt(dir, name, data, 0o644)
 }
 
 func removeWorkspaceMarker(wsDir, name string) error {
-	dir, err := openSlateDir(wsDir)
+	dir, err := safeio.OpenDir(filepath.Join(wsDir, ".slate"))
 	if err != nil {
 		return err
 	}
 	defer dir.Close()
-	return unix.Unlinkat(int(dir.Fd()), name, 0)
+	return safeio.RemoveAt(dir, name)
 }
 
 // recordAgentRun drops each agent run's outcome into the workspace. A clean
@@ -485,8 +471,8 @@ func oddTrailingBackslashes(s string) bool {
 }
 
 // shellQuoteAll renders args as single-quoted shell words, the only POSIX
-// quoting with no expansions left inside; embedded quotes use the '\''
-// close-escape-reopen idiom.
+// quoting with no expansions left inside; an embedded single quote is
+// closed, backslash-escaped, then reopened (the quote/backslash/quote/quote idiom).
 func shellQuoteAll(args []string) string {
 	quoted := make([]string, len(args))
 	for i, a := range args {

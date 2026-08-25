@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/devtime-ltd/slate/internal/config"
+	"github.com/devtime-ltd/slate/internal/safeio"
 	"github.com/devtime-ltd/slate/internal/workspace"
 )
 
@@ -64,5 +65,10 @@ func generateInline(workspaceDir, mainRoot string, cfg config.ProjectConfig, id 
 		content = rendered
 	}
 
-	return os.WriteFile(ComposeFilePath(workspaceDir), []byte(content), 0o644)
+	slateFd, err := safeio.OpenDir(filepath.Join(workspaceDir, ".slate"))
+	if err != nil {
+		return fmt.Errorf("opening .slate: %w", err)
+	}
+	defer slateFd.Close()
+	return safeio.WriteFileAt(slateFd, filepath.Base(ComposeFilePath(workspaceDir)), []byte(content), 0o644)
 }

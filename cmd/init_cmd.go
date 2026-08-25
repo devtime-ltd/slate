@@ -75,6 +75,8 @@ func generateSlateYml(scaffold string) string {
 
 # apt_packages: [ghostscript, imagemagick, libmagickwand-dev]
 # php_extensions: [imagick]
+
+# node_image: node:22   # default node:24; pin one whose npm satisfies engines.npm
 `
 	case "nextjs":
 		return `scaffold: nextjs
@@ -82,6 +84,8 @@ func generateSlateYml(scaffold string) string {
 # Override lifecycle (optional, scaffold provides sensible defaults):
 # setup: |   # runs in the container on every slate new / slate up
 # fresh: |   # runs after setup on slate new and slate up --fresh
+
+# node_image: node:22-slim   # default node:24-slim; pin one whose npm satisfies engines.npm
 `
 	case "inline":
 		return `# Inline scaffold: bring your own compose file (committed to this repo).

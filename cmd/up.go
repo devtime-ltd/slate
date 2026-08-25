@@ -105,6 +105,10 @@ func runUp(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// A changed Dockerfile (node_image on nextjs, apt_packages, php_extensions,
+	// php_ini) reaches the container only on an explicit `slate up --build`, as
+	// it always has for those keys; a fresh workspace still builds because no
+	// image exists yet.
 	opts := provisionOpts{fresh: upFresh, build: upBuild, wipe: upFresh}
 
 	// First provision of a bare workspace runs the fresh lifecycle: the

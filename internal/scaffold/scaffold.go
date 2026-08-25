@@ -13,6 +13,7 @@ import (
 	"text/template"
 
 	"github.com/devtime-ltd/slate/internal/config"
+	"github.com/devtime-ltd/slate/internal/safeio"
 )
 
 type Scaffold interface {
@@ -81,11 +82,24 @@ func Resolve(cfg config.ProjectConfig) (Scaffold, error) {
 	return Get(cfg.Scaffold.Name)
 }
 
+// Generate renders the scaffold's files and writes them into the workspace.
+// Rendering is completed for every file before anything is written, so a
+// rendering error (a bad template, an invalid node_image) leaves the workspace
+// untouched.
 func Generate(workspaceDir, mainRoot string, cfg config.ProjectConfig, id Identity) error {
 	slateDir := filepath.Join(workspaceDir, ".slate")
 	if err := os.MkdirAll(slateDir, 0o755); err != nil {
 		return fmt.Errorf("creating .slate dir: %w", err)
 	}
+	// .slate is container-writable, so pin it as an fd and write the generated
+	// files through *at syscalls: OpenDir refuses a symlinked .slate, and the
+	// fd resolves against its inode so a concurrent swap of the path can't
+	// redirect the writes to a host file.
+	slateFd, err := safeio.OpenDir(slateDir)
+	if err != nil {
+		return fmt.Errorf("opening .slate: %w", err)
+	}
+	defer slateFd.Close()
 
 	s, err := Resolve(cfg)
 	if err != nil {
@@ -105,6 +119,11 @@ func Generate(workspaceDir, mainRoot string, cfg config.ProjectConfig, id Identi
 		return fmt.Errorf("reading scaffold %s: %w", name, err)
 	}
 
+	type renderedFile struct {
+		destPath string
+		content  string
+	}
+	var files []renderedFile
 	for _, entry := range entries {
 		destPath, ok := fileMap[entry.Name()]
 		if !ok || destPath == "" {
@@ -132,12 +151,45 @@ func Generate(workspaceDir, mainRoot string, cfg config.ProjectConfig, id Identi
 			}
 		}
 
-		if err := os.WriteFile(destPath, []byte(content), 0o644); err != nil {
-			return fmt.Errorf("writing %s: %w", destPath, err)
+		files = append(files, renderedFile{destPath, content})
+	}
+
+	for _, f := range files {
+		// The writes go through the pinned .slate fd, so a scaffold whose
+		// FileMap ever nests a file in a subdirectory would be silently
+		// misplaced at the top level; require a direct child instead.
+		if filepath.Dir(f.destPath) != slateDir {
+			return fmt.Errorf("generated file %s is not directly under .slate", f.destPath)
+		}
+		if err := safeio.WriteFileAt(slateFd, filepath.Base(f.destPath), []byte(f.content), 0o644); err != nil {
+			return fmt.Errorf("writing %s: %w", f.destPath, err)
 		}
 	}
 
 	return nil
+}
+
+const defaultNodeImage = "node:24"
+
+// Deliberately permissive about structure (registry, port, path, tag, digest)
+// and strict about the characters that would let a value break out of the
+// compose field it lands in: whitespace, quotes, and ${...} interpolation.
+var nodeImageRef = regexp.MustCompile(`^[A-Za-z0-9\[][A-Za-z0-9._:/@\[\]-]{0,999}$`)
+
+func nodeImage(cfg config.ProjectConfig, fallback string) (string, error) {
+	if raw, ok := cfg.Extra["node_image"]; ok {
+		if _, isString := raw.(string); !isString {
+			return "", fmt.Errorf("node_image must be a string, got %T", raw)
+		}
+	}
+	img := cfg.String("node_image")
+	if img == "" {
+		return fallback, nil
+	}
+	if !nodeImageRef.MatchString(img) {
+		return "", fmt.Errorf("node_image %q is not a valid image reference", img)
+	}
+	return img, nil
 }
 
 // renderCompose omits the ${MAIN_ROOT}/.env bind mount when the main checkout
@@ -161,9 +213,15 @@ func renderCompose(content, mainRoot string, cfg config.ProjectConfig, id Identi
 	if err != nil {
 		return "", err
 	}
+	img, err := nodeImage(cfg, defaultNodeImage)
+	if err != nil {
+		return "", err
+	}
+
 	var b strings.Builder
 	if err := tmpl.Execute(&b, map[string]any{
 		"HasMainEnv": hasMainEnv,
+		"NodeImage":  img,
 		"Database":   cfg.Database,
 		"Project":    id.Project,
 		"Workspace":  id.Workspace,
@@ -203,32 +261,39 @@ func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffol
 	}
 
 	slateDir := filepath.Join(workspaceDir, ".slate")
-	composeOverride := filepath.Join(slateDir, "compose.files.yaml")
-	filesDir := filepath.Join(slateDir, "files")
 
-	for _, p := range []string{slateDir, composeOverride, filesDir} {
-		if info, err := os.Lstat(p); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%s is a symlink; refusing to operate", p)
-		}
+	if err := os.MkdirAll(slateDir, 0o755); err != nil {
+		return fmt.Errorf("creating .slate dir: %w", err)
 	}
+	// .slate is container-writable; pin it as an fd so the writes below go
+	// through *at syscalls and a concurrent path swap can't redirect them.
+	slateFd, err := safeio.OpenDir(slateDir)
+	if err != nil {
+		return fmt.Errorf("opening .slate: %w", err)
+	}
+	defer slateFd.Close()
 
-	if err := os.Remove(composeOverride); err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "  warning: could not remove stale %s: %v\n", composeOverride, err)
+	if err := safeio.RemoveAllAt(slateFd, "compose.files.yaml"); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: could not remove stale compose.files.yaml: %v\n", err)
 	}
 
 	if len(files) == 0 {
 		return nil
 	}
 
-	// RemoveAll handles symlinks as symlinks (not following them), so a hostile
-	// worktree planting .slate/files/file_N as a symlink can't redirect the
-	// WriteFile below.
-	if err := os.RemoveAll(filesDir); err != nil {
+	// Clear and recreate .slate/files entirely through the pinned .slate fd, so
+	// a container swapping a path component can't redirect the removal or write.
+	if err := safeio.RemoveAllAt(slateFd, "files"); err != nil {
 		return fmt.Errorf("clearing files dir: %w", err)
 	}
-	if err := os.MkdirAll(filesDir, 0o755); err != nil {
+	if err := safeio.MkdirAt(slateFd, "files", 0o755); err != nil {
 		return fmt.Errorf("creating files dir: %w", err)
 	}
+	filesFd, err := safeio.OpenDirAt(slateFd, "files")
+	if err != nil {
+		return fmt.Errorf("opening .slate/files: %w", err)
+	}
+	defer filesFd.Close()
 
 	services := appLike
 	if len(services) == 0 {
@@ -247,9 +312,8 @@ func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffol
 		}
 
 		localName := fmt.Sprintf("file_%d", i)
-		localPath := filepath.Join(filesDir, localName)
-		if err := os.WriteFile(localPath, data, 0o644); err != nil {
-			return fmt.Errorf("writing %s: %w", localPath, err)
+		if err := safeio.WriteFileAt(filesFd, localName, data, 0o644); err != nil {
+			return fmt.Errorf("writing .slate/files/%s: %w", localName, err)
 		}
 
 		mount := fmt.Sprintf("      - ./files/%s:%s:ro", localName, target)
@@ -282,7 +346,7 @@ func GenerateFileMounts(workspaceDir string, cfg config.ProjectConfig, s Scaffol
 		}
 	}
 
-	return os.WriteFile(composeOverride, []byte(b.String()), 0o644)
+	return safeio.WriteFileAt(slateFd, "compose.files.yaml", []byte(b.String()), 0o644)
 }
 
 var dbNameRe = regexp.MustCompile(`\{\{DB_NAME(?::([^}]*))?\}\}`)
@@ -434,7 +498,12 @@ func GenerateEnvContainer(workspaceDir, mainRoot, hostname, project, workspace s
 		fmt.Fprintf(&b, "%s=%s\n", k, defaults[k])
 	}
 
-	return os.WriteFile(filepath.Join(workspaceDir, ".env.container"), []byte(b.String()), 0o644)
+	dir, err := safeio.OpenDir(workspaceDir)
+	if err != nil {
+		return fmt.Errorf("opening workspace dir: %w", err)
+	}
+	defer dir.Close()
+	return safeio.WriteFileAt(dir, ".env.container", []byte(b.String()), 0o644)
 }
 
 // BuildLifecycleScript assembles the full script for a lifecycle phase.

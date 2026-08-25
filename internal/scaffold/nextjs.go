@@ -3,6 +3,7 @@ package scaffold
 import (
 	"embed"
 	"path/filepath"
+	"strings"
 
 	"github.com/devtime-ltd/slate/internal/config"
 	"github.com/devtime-ltd/slate/scaffolds"
@@ -13,6 +14,8 @@ type nextjsScaffold struct{}
 func init() {
 	Register(&nextjsScaffold{})
 }
+
+const nextjsNodeImage = "node:24-slim"
 
 func (s *nextjsScaffold) Name() string { return "nextjs" }
 
@@ -59,5 +62,12 @@ func (s *nextjsScaffold) Tools() map[string]config.Tool {
 }
 
 func (s *nextjsScaffold) RenderDockerfile(content string, cfg config.ProjectConfig) (string, error) {
-	return content, nil
+	img, err := nodeImage(cfg, nextjsNodeImage)
+	if err != nil {
+		return "", err
+	}
+	if img == nextjsNodeImage {
+		return content, nil
+	}
+	return strings.Replace(content, "FROM "+nextjsNodeImage, "FROM "+img, 1), nil
 }
