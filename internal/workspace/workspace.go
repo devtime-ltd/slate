@@ -15,12 +15,36 @@ var nameRegex = regexp.MustCompile(`^[a-z][a-z0-9-]*[a-z0-9]$`)
 var singleChar = regexp.MustCompile(`^[a-z0-9]$`)
 var reserved = map[string]bool{"main": true, "master": true, "default": true, "all": true}
 
+// MaxNameLen is the longest a workspace name may be. It bounds the derived
+// docker/compose identifiers and the *.test hostname.
+const MaxNameLen = 32
+
+// ShortenName suggests a valid workspace name at or under MaxNameLen by cutting
+// on a word (dash) boundary where possible. It returns "" when the name isn't
+// over-long or no valid truncation exists.
+func ShortenName(name string) string {
+	if len(name) <= MaxNameLen {
+		return ""
+	}
+	cut := name[:MaxNameLen]
+	if name[MaxNameLen] != '-' && !strings.HasSuffix(cut, "-") {
+		if i := strings.LastIndex(cut, "-"); i >= 0 {
+			cut = cut[:i]
+		}
+	}
+	cut = strings.TrimRight(cut, "-")
+	if ValidateName(cut) != nil {
+		return ""
+	}
+	return cut
+}
+
 func ValidateName(name string) error {
 	if name == "" {
 		return fmt.Errorf("workspace name required")
 	}
-	if len(name) > 32 {
-		return fmt.Errorf("workspace name too long (max 32 chars)")
+	if len(name) > MaxNameLen {
+		return fmt.Errorf("workspace name too long (max %d chars)", MaxNameLen)
 	}
 	if !nameRegex.MatchString(name) && !singleChar.MatchString(name) {
 		return fmt.Errorf("name must be lowercase, start with a letter, use only [a-z0-9-], and not end with -")

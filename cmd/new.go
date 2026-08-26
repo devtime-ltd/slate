@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/devtime-ltd/slate/internal/compose"
 	"github.com/devtime-ltd/slate/internal/config"
@@ -41,7 +43,35 @@ func init() {
 }
 
 func runNew(cmd *cobra.Command, args []string) error {
-	return createWorkspace(args[0], newBranch, newBase, newBg, resolveAutoCd(cmd, "cd", newCd), newAdopt, newBare)
+	name := args[0]
+	if err := workspace.ValidateName(name); err != nil {
+		shorter, rescueErr := offerShorterName(name, err)
+		if rescueErr != nil {
+			return rescueErr
+		}
+		name = shorter
+	}
+	return createWorkspace(name, newBranch, newBase, newBg, resolveAutoCd(cmd, "cd", newCd), newAdopt, newBare)
+}
+
+// offerShorterName rescues a too-long `slate new` name with a whole-word
+// truncation: prompted at a TTY, appended to the error otherwise. One try only;
+// a declined or absent suggestion returns the original validation error.
+func offerShorterName(name string, verr error) (string, error) {
+	suggestion := workspace.ShortenName(name)
+	if suggestion == "" {
+		return "", verr
+	}
+	if !isInteractiveTerminal() {
+		return "", fmt.Errorf("%w; try `slate new %s`", verr, suggestion)
+	}
+	fmt.Printf("Name is too long (%d chars, max %d). Use '%s' instead? [y/N] ", len(name), workspace.MaxNameLen, suggestion)
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+		return "", verr
+	}
+	return suggestion, nil
 }
 
 func createWorkspace(name, branch, base string, bg, cd, adopt, bare bool) error {
