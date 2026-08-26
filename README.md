@@ -252,6 +252,38 @@ up: tmux new-session -A -s {{HOSTNAME}} 'slate agent'
 
 These commands execute on your **host**: your normal claude login, skills, MCPs, and git access all apply. Because of that, `agent`, `new`, and `up` are always read from the **main checkout's** `slate.yml` and never from the workspace copy: the worktree is writable by container code, so a compromised dependency could otherwise edit `slate.yml` and wait for your next slate command. Workspace-side edits to these fields are inert and get a note saying so; land them in the main checkout to take effect. The blast-radius protection stays where it always was, in the containers that run the app and its dependency installs.
 
+### Local overrides (`slate.local.yml`)
+
+An optional, uncommitted `slate.local.yml` next to the main checkout's `slate.yml` overrides the host-side keys per developer: `agent:`, `new:`, `up:`, `doctor:`, and `brief:`. Each key present in the local file replaces the committed value wholesale (a local `agent:` supersedes the whole committed value, pair form included; a present-but-empty key clears it); absent keys fall through to `slate.yml`. Any other key is an error: the overlay exists for per-machine host commands, never for changing what containers run. The first `slate new` after the file appears adds `slate.local.yml` to the project's `.gitignore`, with a note.
+
+The file carries the same trust as the committed `slate.yml`, and the same sourcing rule: it is read **only from the main checkout root**. A `slate.local.yml` inside a workspace worktree is never read (worktrees are container-writable and must never drive host execution) and gets the same inert-edit note as workspace edits to the other host-side keys. One caveat: if your project's compose config bind-mounts the main checkout itself into containers (e.g. an inline scaffold mounting `${MAIN_ROOT}`), the local file becomes container-writable and that guarantee is void - the same trade-off you already accepted for the committed `slate.yml` in that configuration.
+
+A typical use is pinning each workspace's agent session to an account with a directory-mapping account switcher - your machine's convention, without pushing it onto other developers via the committed config. With cswap (claude-swap) as the example switcher:
+
+```yaml
+# slate.local.yml (uncommitted)
+agent:
+  - cswap run -- claude --name "{{PROJECT}}--{{WORKSPACE}}"
+  - cswap run -- claude --continue
+```
+
+### Project checks and notes: `doctor:` and `brief:`
+
+Two more host-side keys, valid in `slate.yml` and `slate.local.yml` (local replaces committed wholesale, like the rest):
+
+```yaml
+doctor:
+  claude-account: cswap map --resolve .
+  vpn: ping -c1 -W1 10.0.0.1
+
+brief: |
+  echo "**Account:** $(cswap status --json | jq -r '.accounts[] | select(.active) | .email')"
+```
+
+`doctor:` is a map of named host checks merged into `slate doctor` after the built-in checks, each run via `sh -c` in the main checkout, in name order. Exit 0 renders as a pass; non-zero renders as a warning with the exit code and the check's combined output, and never affects `slate doctor`'s own result - built-in checks alone decide that. Each check gets 10 seconds before it is killed and reported as timed out. There is no workspace context in `doctor`: `{{PROJECT}}` expands and `SLATE_PROJECT` is set, while `{{WORKSPACE}}`/`{{HOSTNAME}}` stay literal and `SLATE_WORKSPACE` is unset.
+
+`brief:` is a single host command whose stdout is appended to `slate brief`'s output under a `## Project notes` heading - project facts a generated cheatsheet can't know, resolved at print time. It runs in the current workspace's worktree when there is one (so cwd-sensitive tools resolve correctly), otherwise in the main checkout; `{{PROJECT}}`/`SLATE_PROJECT` always apply, `{{WORKSPACE}}`/`{{HOSTNAME}}`/`SLATE_WORKSPACE` only with a workspace context. A non-zero exit or timeout prints a warning to stderr and omits the section, keeping the output clean, pasteable markdown.
+
 ### When the agent command never starts
 
 An agent command that returns straight away hasn't hosted a session, whatever its exit code. `claude --continue` with no conversation to continue prints its complaint and exits (0 or 1, depending on the claude build), which reads as a clean quit or an ordinary command failure: either way it takes any enclosing tmux session down with it and nothing records that the session never happened. Slate treats an `agent:` command that exits within three seconds as a failed launch instead of a clean exit:

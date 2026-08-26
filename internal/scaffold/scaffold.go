@@ -410,7 +410,8 @@ func ComposeFilePath(workspaceDir string) string {
 	return filepath.Join(workspaceDir, ".slate", "compose.yaml")
 }
 
-func EnsureGitignore(projectDir string) error {
+// EnsureGitignore returns the entries it appended.
+func EnsureGitignore(projectDir string) ([]string, error) {
 	gi := filepath.Join(projectDir, ".gitignore")
 	data, _ := os.ReadFile(gi)
 
@@ -430,27 +431,34 @@ func EnsureGitignore(projectDir string) error {
 	if !have[".env.container"] && !gitIgnored(projectDir, ".env.container") {
 		missing = append(missing, ".env.container")
 	}
+	// The per-developer overlay is only covered once it exists: a project
+	// without one shouldn't carry the entry.
+	if info, err := os.Stat(filepath.Join(projectDir, config.LocalConfigName)); err == nil && !info.IsDir() {
+		if !have[config.LocalConfigName] && !gitIgnored(projectDir, config.LocalConfigName) {
+			missing = append(missing, config.LocalConfigName)
+		}
+	}
 	if len(missing) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	f, err := os.OpenFile(gi, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
 
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		if _, err := f.WriteString("\n"); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for _, entry := range missing {
 		if _, err := f.WriteString(entry + "\n"); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return missing, nil
 }
 
 // gitIgnored reports whether git already ignores path (any ignore source).

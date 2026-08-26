@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -552,7 +553,7 @@ func (noAppServicesScaffold) AppLikeServices() []string { return nil }
 
 func TestEnsureGitignoreAddsBothEntries(t *testing.T) {
 	dir := t.TempDir()
-	if err := EnsureGitignore(dir); err != nil {
+	if _, err := EnsureGitignore(dir); err != nil {
 		t.Fatalf("EnsureGitignore: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
@@ -574,7 +575,7 @@ func TestEnsureGitignoreAddsEnvContainerWhenSlateAlreadyPresent(t *testing.T) {
 	if err := os.WriteFile(gi, []byte("/vendor\n.slate/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := EnsureGitignore(dir); err != nil {
+	if _, err := EnsureGitignore(dir); err != nil {
 		t.Fatalf("EnsureGitignore: %v", err)
 	}
 	data, _ := os.ReadFile(gi)
@@ -586,7 +587,7 @@ func TestEnsureGitignoreAddsEnvContainerWhenSlateAlreadyPresent(t *testing.T) {
 func TestEnsureGitignoreIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 3; i++ {
-		if err := EnsureGitignore(dir); err != nil {
+		if _, err := EnsureGitignore(dir); err != nil {
 			t.Fatalf("EnsureGitignore #%d: %v", i, err)
 		}
 	}
@@ -885,5 +886,41 @@ func TestNodeImageRejectsNonStringYAML(t *testing.T) {
 		if _, err := nodeImage(cfg, defaultNodeImage); err == nil {
 			t.Errorf("node_image %v (%T) should be rejected as non-string", raw, raw)
 		}
+	}
+}
+
+func TestEnsureGitignoreCoversLocalConfigOnlyWhenPresent(t *testing.T) {
+	dir := t.TempDir()
+
+	added, err := EnsureGitignore(dir)
+	if err != nil {
+		t.Fatalf("EnsureGitignore: %v", err)
+	}
+	if slices.Contains(added, config.LocalConfigName) {
+		t.Errorf("a project without %s shouldn't carry the entry, added %v", config.LocalConfigName, added)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, config.LocalConfigName), []byte("agent: claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	added, err = EnsureGitignore(dir)
+	if err != nil {
+		t.Fatalf("EnsureGitignore: %v", err)
+	}
+	if !slices.Contains(added, config.LocalConfigName) {
+		t.Errorf("expected %s to be appended, added %v", config.LocalConfigName, added)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if !hasGitignoreLine(string(data), config.LocalConfigName) {
+		t.Errorf("expected .gitignore to contain %q, got:\n%s", config.LocalConfigName, data)
+	}
+
+	// idempotent: a second run reports nothing new
+	added, err = EnsureGitignore(dir)
+	if err != nil {
+		t.Fatalf("EnsureGitignore: %v", err)
+	}
+	if len(added) != 0 {
+		t.Errorf("second run should append nothing, added %v", added)
 	}
 }
