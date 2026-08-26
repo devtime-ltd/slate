@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/devtime-ltd/slate/internal/compose"
@@ -101,9 +102,9 @@ func createWorkspace(name, branch, base string, bg, cd, adopt, bare bool) error 
 		return fmt.Errorf("no slate.yml in this project. Run `slate init <scaffold>` first (e.g. `slate init laravel`)")
 	}
 
-	cfg, err := config.LoadProject(mainRoot)
+	cfg, err := config.LoadMainProject(mainRoot)
 	if err != nil {
-		return fmt.Errorf("loading slate.yml: %w", err)
+		return fmt.Errorf("loading slate config: %w", err)
 	}
 
 	wsDir, err := workspace.WorkspaceDir(name)
@@ -181,8 +182,12 @@ func createWorkspace(name, branch, base string, bg, cd, adopt, bare bool) error 
 	if err := scaffold.GenerateEnvContainer(wsDir, mainRoot, hostname, projectName, name, cfg, proxyConfig); err != nil {
 		return fmt.Errorf("generating .env.container: %w", err)
 	}
-	if err := scaffold.EnsureGitignore(mainRoot); err != nil {
+	added, err := scaffold.EnsureGitignore(mainRoot)
+	if err != nil {
 		fmt.Printf("  warning: could not update .gitignore: %v\n", err)
+	}
+	if slices.Contains(added, config.LocalConfigName) {
+		fmt.Printf("  Added %s to .gitignore (local overrides are per-developer, never committed).\n", config.LocalConfigName)
 	}
 
 	// Bare returns before compose.NewEnv: it must work without Docker or a

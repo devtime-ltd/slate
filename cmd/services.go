@@ -40,11 +40,25 @@ func warnIfWorkspaceConfigDiffers(mainRoot, wsDir string) {
 	if note := workspaceConfigNote(mainRoot, wsDir); note != "" {
 		fmt.Fprintln(os.Stderr, note)
 	}
+	if keys := config.TrustPinned(mainRoot, wsDir); len(keys) > 0 {
+		fmt.Fprintf(os.Stderr, "  note: this workspace's slate.yml changes `%s`; these come from committed content on this branch (or the main checkout), so commit the change here for it to take effect\n", strings.Join(keys, "` and `"))
+	}
+	warnIfHostExecEditsInert(mainRoot, wsDir)
+}
+
+// warnIfHostExecEditsInert covers just the host-exec notes, for commands
+// (like `slate brief`) that never use the worktree's config and where the
+// broader worktree-config notes would be untrue.
+func warnIfHostExecEditsInert(mainRoot, wsDir string) {
 	if keys := config.HostExecPinned(mainRoot, wsDir); len(keys) > 0 {
 		fmt.Fprintf(os.Stderr, "  note: this workspace's slate.yml changes `%s`; host commands always come from the main checkout's slate.yml, so the change has no effect until it lands there\n", strings.Join(keys, "` and `"))
 	}
-	if keys := config.TrustPinned(mainRoot, wsDir); len(keys) > 0 {
-		fmt.Fprintf(os.Stderr, "  note: this workspace's slate.yml changes `%s`; these come from committed content on this branch (or the main checkout), so commit the change here for it to take effect\n", strings.Join(keys, "` and `"))
+	if wsDir != "" && mainRoot != wsDir {
+		// any entry by this name is equally inert, so a directory or broken
+		// symlink gets the note too
+		if _, err := os.Lstat(filepath.Join(wsDir, config.LocalConfigName)); err == nil {
+			fmt.Fprintf(os.Stderr, "  note: this workspace has a %s; local overrides are only read from the main checkout root, so it has no effect\n", config.LocalConfigName)
+		}
 	}
 }
 

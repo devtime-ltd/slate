@@ -594,3 +594,148 @@ func TestDockerfileContentKeysAreNotTakenFromTheWorktree(t *testing.T) {
 		t.Errorf("TrustPinned = %v, want it to report apt_packages and php_extensions as inert", pinned)
 	}
 }
+
+func TestLoadMainProjectAppliesLocalOverlay(t *testing.T) {
+	mainRoot := t.TempDir()
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte(`scaffold: laravel
+agent:
+  - claude --name x
+  - claude --continue
+new: slate agent
+up: slate agent
+doctor:
+  vpn: ping -c1 gw
+brief: echo committed
+`), 0o644)
+
+	// no local file: committed values apply untouched
+	cfg, err := LoadMainProject(mainRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.First != "claude --name x" || cfg.Brief != "echo committed" {
+		t.Errorf("committed config should apply without a local file, got %+v / %q", cfg.Agent, cfg.Brief)
+	}
+
+	// present keys replace wholesale: the single local agent supersedes the
+	// whole committed pair, no element-wise merging
+	os.WriteFile(filepath.Join(mainRoot, LocalConfigName), []byte(`agent: cswap run claude
+doctor:
+  account: check-account
+`), 0o644)
+	cfg, err = LoadMainProject(mainRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.First != "cswap run claude" || cfg.Agent.Again != "cswap run claude" {
+		t.Errorf("local agent should replace the pair wholesale, got %+v", cfg.Agent)
+	}
+	if len(cfg.Doctor) != 1 || cfg.Doctor["account"] != "check-account" {
+		t.Errorf("local doctor should replace the committed map wholesale, got %v", cfg.Doctor)
+	}
+	if cfg.New != "slate agent" || cfg.Up != "slate agent" || cfg.Brief != "echo committed" {
+		t.Errorf("absent keys should fall through to slate.yml, got %q / %q / %q", cfg.New, cfg.Up, cfg.Brief)
+	}
+}
+
+func TestLocalOverlayRejectsDisallowedKeys(t *testing.T) {
+	mainRoot := t.TempDir()
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: laravel\n"), 0o644)
+	os.WriteFile(filepath.Join(mainRoot, LocalConfigName), []byte("agent: claude\nenv:\n  X: y\nfiles:\n  - ~/.netrc:/root/.netrc\n"), 0o644)
+
+	_, err := LoadMainProject(mainRoot)
+	if err == nil {
+		t.Fatal("container-reaching keys in slate.local.yml should error")
+	}
+	for _, want := range []string{"env", "files", "slate.local.yml", "agent`, `brief`, `doctor`, `new`, `up"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should contain %q, got: %v", want, err)
+		}
+	}
+}
+
+func TestLocalOverlayInvalidYAMLErrors(t *testing.T) {
+	mainRoot := t.TempDir()
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: laravel\n"), 0o644)
+	os.WriteFile(filepath.Join(mainRoot, LocalConfigName), []byte("agent: {bad: map}\n"), 0o644)
+	if _, err := LoadMainProject(mainRoot); err == nil {
+		t.Error("an invalid slate.local.yml should error rather than being ignored")
+	}
+}
+
+func TestLocalOverlayNeverReadFromWorktree(t *testing.T) {
+	mainRoot := t.TempDir()
+	wsDir := t.TempDir()
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: laravel\nagent: claude\n"), 0o644)
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\n"), 0o644)
+	os.WriteFile(filepath.Join(wsDir, LocalConfigName), []byte("agent: evil\n"), 0o644)
+
+	cfg, err := LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Again != "claude" {
+		t.Errorf("a worktree slate.local.yml must be inert, got agent %+v", cfg.Agent)
+	}
+
+	// the main checkout's local overlay does reach workspace resolution
+	os.WriteFile(filepath.Join(mainRoot, LocalConfigName), []byte("agent: cswap run claude\nbrief: echo local\n"), 0o644)
+	cfg, err = LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Again != "cswap run claude" || cfg.Brief != "echo local" {
+		t.Errorf("main checkout local overlay should apply, got %+v / %q", cfg.Agent, cfg.Brief)
+	}
+}
+
+func TestHostExecPinnedReportsDoctorAndBrief(t *testing.T) {
+	mainRoot := t.TempDir()
+	wsDir := t.TempDir()
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: laravel\n"), 0o644)
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\ndoctor:\n  vpn: evil\nbrief: evil\n"), 0o644)
+
+	if pinned := HostExecPinned(mainRoot, wsDir); !slices.Equal(pinned, []string{"doctor", "brief"}) {
+		t.Errorf("HostExecPinned = %v, want [doctor brief]", pinned)
+	}
+	cfg, err := LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Doctor) != 0 || cfg.Brief != "" {
+		t.Errorf("doctor/brief should stay pinned to main, got %v / %q", cfg.Doctor, cfg.Brief)
+	}
+}
+
+func TestLocalOverlayReadFailureErrors(t *testing.T) {
+	mainRoot := t.TempDir()
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: laravel\n"), 0o644)
+	// a directory in the file's place: any read failure other than
+	// not-exist must surface rather than silently dropping the overrides
+	if err := os.Mkdir(filepath.Join(mainRoot, LocalConfigName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadMainProject(mainRoot); err == nil {
+		t.Error("an unreadable slate.local.yml should error, not silently disable overrides")
+	}
+}
+
+func TestHostExecPinnedIgnoresLocalOverlayDifferences(t *testing.T) {
+	mainRoot := t.TempDir()
+	wsDir := t.TempDir()
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: laravel\nagent: claude\n"), 0o644)
+	os.WriteFile(filepath.Join(mainRoot, LocalConfigName), []byte("agent: cswap run claude\n"), 0o644)
+	// the worktree carries the committed slate.yml unchanged: that is not an
+	// edit, and the local overlay must not make every workspace warn
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nagent: claude\n"), 0o644)
+
+	if pinned := HostExecPinned(mainRoot, wsDir); len(pinned) != 0 {
+		t.Errorf("HostExecPinned = %v, want none when the worktree matches the committed config", pinned)
+	}
+
+	// an actual worktree edit still warns
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nagent: evil\n"), 0o644)
+	if pinned := HostExecPinned(mainRoot, wsDir); !slices.Equal(pinned, []string{"agent"}) {
+		t.Errorf("HostExecPinned = %v, want [agent] for a real worktree edit", pinned)
+	}
+}

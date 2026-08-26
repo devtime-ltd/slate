@@ -83,6 +83,20 @@ worktree copy is container-writable and must never drive host execution.
 Workspace-side edits to them are inert and surface a note
 (`config.HostExecPinned`).
 
+The per-developer overlay `slate.local.yml` (main checkout root only, same
+trust level and sourcing rule as the main slate.yml) joins that trusted path
+in `config.LoadMainProject`, the loader for anything consuming host-exec
+config from the main checkout. It may set only the host-side keys - `agent`,
+`brief`, `doctor`, `new`, `up`, the single `config.LocalOverridableKeys`
+list, which future host-side keys join - each replacing the committed value
+wholesale; any other key errors. A worktree copy of the file is never read
+and surfaces a note. `doctor:` (named checks appended to `slate doctor` as
+pass/warn, never affecting its result) and `brief:` (stdout appended to
+`slate brief` under `## Project notes`, omitted with a stderr warning on
+failure) run through `runCapturedHook` (cmd/doctor.go) with a 10s timeout
+(`hookTimeout`); doctor has no workspace context, so only `{{PROJECT}}`
+expands there.
+
 `slate agent` splits its args at `ArgsLenAtDash`: at most one positional
 (workspace name) before `--`, everything after passed through to the agent
 command, both variants, the first-run retry included. Args are spliced as

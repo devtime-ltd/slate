@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -22,13 +23,66 @@ var briefCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		cfg, err := config.LoadProject(mainRoot)
+		cfg, err := config.LoadMainProject(mainRoot)
 		if err != nil {
 			return err
 		}
+		// The hook runs in the current workspace's worktree when there is
+		// one, so cwd-sensitive tools resolve against the workspace; an
+		// explicit target that fails must error rather than silently fall
+		// back to the main checkout. Resolved before the no-hook return so
+		// a worktree-only brief:/agent: still gets its inert-edit note
+		// (on stderr, clear of the markdown).
+		wsName, dir := "", mainRoot
+		if n, d, rerr := workspace.ResolveWorkspace(); rerr == nil {
+			wsName, dir = n, d
+			warnIfHostExecEditsInert(mainRoot, dir)
+		} else if workspace.OverrideSet() {
+			return rerr
+		}
 		fmt.Print(briefText(cfg))
+		if cfg.Brief == "" {
+			return nil
+		}
+		project, err := workspace.ProjectName(cfg.Project)
+		if err != nil {
+			return err
+		}
+		fmt.Print(briefHookSection(cfg.Brief, project, wsName, dir))
 		return nil
 	},
+}
+
+// briefHookSection runs the `brief:` hook and returns its stdout as a
+// markdown section. {{PROJECT}} always expands; {{WORKSPACE}}/{{HOSTNAME}}
+// and SLATE_WORKSPACE apply only with a workspace context (wsName set). Any
+// failure warns on stderr and omits the section so the brief output stays
+// clean, pasteable markdown.
+func briefHookSection(command, project, wsName, dir string) string {
+	env := []string{"SLATE_PROJECT=" + project}
+	if wsName != "" {
+		command = expandCommand(command, wsName, project)
+		env = append(env, "SLATE_WORKSPACE="+wsName)
+	} else {
+		command = strings.ReplaceAll(command, "{{PROJECT}}", project)
+	}
+	res, err := runCapturedHook(command, dir, env, false)
+	switch {
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "warning: the brief: hook could not run (%v); omitting project notes\n", err)
+		return ""
+	case res.timedOut:
+		fmt.Fprintf(os.Stderr, "warning: the brief: hook timed out after %s; omitting project notes\n", hookTimeout)
+		return ""
+	case res.exitCode != 0:
+		fmt.Fprintf(os.Stderr, "warning: the brief: hook exited %d; omitting project notes\n", res.exitCode)
+		return ""
+	}
+	text := strings.TrimSpace(res.output)
+	if text == "" {
+		return ""
+	}
+	return "\n## Project notes\n\n" + text + "\n"
 }
 
 func init() {
