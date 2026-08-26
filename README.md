@@ -1,8 +1,8 @@
 # Slate
 
-Isolated dev workspaces powered by Docker. One command to start, HTTPS out of the box, containers you never have to think about.
+Isolated dev workspaces via Docker. HTTPS out of the box.
 
-Your code stays on the host, everything else runs in Docker containers. Each workspace gets its own database, services, and HTTPS URL, spun up from a git worktree in seconds.
+Each workspace gets its own database, services, and HTTPS URL, spun up from a git worktree.
 
 ## Installation
 
@@ -123,13 +123,13 @@ Each `slate new` creates a git worktree and spins up a set of Docker containers 
 
 ```
 Host                          Containers (per workspace)
-┌──────────────────────┐      ┌──────────────────────────┐
-│ Your editor          │      │ app (PHP/Node/Ruby)      │
+┌──────────────────────┐      ┌───────────────────────────┐
+│ Your editor          │      │ app (PHP/Node/Ruby)       │
 │ Git worktrees        │ ───► │ database (MySQL/Postgres) │
-│ Slate CLI            │      │ vite/assets              │
-│ HTTPS proxy (Caddy)  │      │ queue worker             │
-└──────────────────────┘      │ mailpit                  │
-                              └──────────────────────────┘
+│ Slate CLI            │      │ vite/assets               │
+│ HTTPS proxy (Caddy)  │      │ queue worker              │
+└──────────────────────┘      │ mailpit                   │
+                              └───────────────────────────┘
 ```
 
 Source code is bind-mounted from the host. Package installs (`composer install`, `npm install`) run inside containers so compromised dependencies can't access your SSH keys, cloud credentials, or browser password stores. Dependency caches live inside each workspace at `.slate/composer/` and `.slate/npm-cache/`.
@@ -155,6 +155,8 @@ Each workspace uses the `slate.yml` in its **own worktree** when present, so a b
 - `scaffold:`, `files:`, `database:`, `env:`, `node_image:`, `apt_packages:`, `php_extensions:`, and `php_ini:` (`database`/`env` interpolate into compose files; `node_image` picks the image a container runs; `apt_packages`/`php_extensions`/`php_ini` become root build steps in its Dockerfile) can reach host resources, so they come from **committed content on the workspace branch** (containers can't commit; the `.git` mount is read-only) or, when the branch doesn't commit a `slate.yml`, from the main checkout. Uncommitted worktree edits to them are inert and get a note; commit them on the branch to test. This keeps a rewritten worktree config (e.g. by a compromised dependency) from mounting host files into containers, running an image of its choosing, or baking commands into that image, on your next `slate up`.
 
 Heavier changes like swapping `scaffold:` usually want `slate up --fresh`.
+
+If `slate.yml` is commited and local overrides are needed (e.g. individiual developer overrides/preferences), a `slate.local.yml` file can be created (add to .gitignore).
 
 ### Customisation
 
