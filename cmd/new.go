@@ -132,6 +132,13 @@ func createWorkspace(name, branch, base string, bg, cd, adopt, bare bool) error 
 	} else {
 		fmt.Printf("Creating worktree (branch: %s)...\n", branch)
 	}
+	// A reused name commonly starts at the same default-branch SHA; drop any
+	// teardown markers left by an earlier incarnation so its staging can't
+	// authorise destroying this fresh one. Only once we are actually creating,
+	// so a refused `slate new` over an existing workspace keeps its staging.
+	_ = os.Remove(stagedTeardownMarker(wsDir))
+	_ = os.Remove(teardownDeclinedMarker(wsDir))
+
 	if err := workspace.CreateWorktree(mainRoot, wsDir, branch, base); err != nil {
 		return fmt.Errorf("git worktree add failed: %w", err)
 	}
