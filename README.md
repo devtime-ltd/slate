@@ -53,6 +53,7 @@ Workspace lifecycle:
   slate down [name]               Stop (preserves data)
   slate restart [name] [service]  Restart workspace or single service
   slate rm [name]                 Destroy workspace (containers, volumes, worktree)
+  slate done [name]               Destroy a workspace once its work has landed (safe teardown)
   slate ls [--all]                List workspaces (current project or all registered)
   slate wait [name]               Block until a background provision finishes
 
@@ -90,8 +91,10 @@ Add `--project <name>` to any command to target a project other than the current
 ### Useful flags
 
 - `slate new <name> -b <branch>`: custom branch name (default: `slate/<name>`).
+- `slate new <name>`: workspace names are at most 32 characters; an overlong name is offered a whole-word truncation (prompted at a terminal, or suggested in the error for non-interactive callers).
 - `slate new <name> --base <ref>`: fork the new branch from `<ref>` (e.g. `main`, `origin/main`, a tag or SHA) instead of the main checkout's current HEAD, so workspaces get a deliberate base even while the main checkout sits on an unrelated branch. Refused if the branch already exists, since its history is already set.
 - `slate new <name> --bg`: fork the slow phase (build + lifecycle) to the background; the fast phase (worktree + scaffold) runs inline so editing can start immediately. Progress is captured in `.slate/workspaces/<name>/.slate/provision.log` and surfaced as `provisioning` in `slate ls` (`failed` if it errors). While a bg provision is in flight, `slate up` and `slate restart` refuse to touch the workspace; `slate exec`, `slate shell`, and the scaffold tools wait for it instead of failing; `slate wait` blocks until it finishes (non-zero exit + log tail on failure); `slate rm` aborts it as an escape hatch. A configured `new:` hook backgrounds provisioning automatically, no flag needed (see [Agent](#agent--new--up-what-newup-drop-you-into)).
+- `slate done [name]`: the safe alternative to `slate rm` - it destroys the workspace only after proving the work landed (clean worktree, no provisioning in flight, and the branch merged into the default branch by ancestry or a merged PR). If it can't prove that, it refuses with reasons instead of destroying; `slate rm -f` stays the force path. Inside a workspace's own agent session the teardown is staged and runs when the session exits.
 - `slate new <name> --cd` / `--cd=false`: opt in or out of dropping into a shell at the new workspace. Default comes from `auto_cd` in `~/.config/slate/config.yml` (default `true`), suppressed when stdio isn't an interactive terminal so scripts/CI/agents never block on a spawned shell. With `--bg` the shell is spawned immediately; without, after provisioning finishes.
 - `slate new <name> --adopt`: carry your uncommitted changes from the main checkout into the new worktree (tracked changes patched in, untracked files copied). The main checkout is left untouched.
 - `slate new <name> --bare`: worktree + scaffold only, no containers; for quick edits that don't need a running app. Shown as `bare` in `slate ls`; the first `slate up` provisions it with the fresh-workspace lifecycle. Hooks don't fire.

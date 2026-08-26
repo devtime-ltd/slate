@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"math"
@@ -177,6 +178,9 @@ func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool, extra 
 		return holdWorkspaceOpen(wsDir, fmt.Errorf("the %s agent session ended with exit %d after %s; holding the workspace so the failure output survives: %s",
 			variant, run.exitCode, run.elapsed.Round(time.Second), run.command))
 	}
+	// The session ended cleanly: run any teardown staged during it (via
+	// `slate done`), or offer one when the work provably landed.
+	offerTeardownOnExit(wsName, wsDir)
 	return nil
 }
 
@@ -373,11 +377,16 @@ func runHostCommandDetail(cfg config.ProjectConfig, command, wsName, wsDir strin
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
+	agentEnv := "0"
+	if agentRun {
+		agentEnv = "1"
+	}
 	c.Env = append(os.Environ(),
 		"SLATE_WORKSPACE="+wsName,
 		"SLATE_PROJECT="+project,
 		"SLATE_FRESH="+freshEnv,
 		"SLATE_PROVISIONING="+provisioningEnv,
+		"SLATE_AGENT="+agentEnv,
 	)
 
 	started := time.Now()
@@ -518,4 +527,75 @@ func upAt(cfg config.ProjectConfig, wsName, wsDir string, fresh bool) error {
 		}
 	}
 	return spawnShellAt(wsDir)
+}
+
+// offerTeardownOnExit runs after an agent session ends. It speaks only when
+// there is something worth saying: a teardown staged from inside the session
+// (via `slate done`), or work that provably landed. Mid-work exits stay
+// silent, and nothing is destroyed without a human saying so - except a
+// staged teardown, which the human already asked for in-session. A declined
+// offer is remembered per tip so re-entering the session doesn't nag.
+func offerTeardownOnExit(wsName, wsDir string) {
+	mainRoot, err := workspace.MainRoot()
+	if err != nil {
+		return
+	}
+	ev := checkLanded(mainRoot, wsDir)
+
+	// A staged marker only counts for the tip it was staged at: a marker
+	// left behind by an earlier incarnation of this workspace name, or
+	// staged before further commits, must not authorise destroying the
+	// current state.
+	staged, stale := false, false
+	if raw, err := os.ReadFile(stagedTeardownMarker(wsDir)); err == nil {
+		switch {
+		case ev.tip == "":
+			// Couldn't determine the current tip (e.g. a transient git error):
+			// keep the marker rather than discard a valid staging.
+		case strings.TrimSpace(string(raw)) == ev.tip:
+			staged = true
+		default:
+			stale = true
+			_ = os.Remove(stagedTeardownMarker(wsDir))
+		}
+	}
+
+	interactive := isInteractiveTerminal()
+	hostname, err := resolveHostname(wsName)
+	if err != nil {
+		return
+	}
+
+	switch {
+	case staged && ev.ok:
+		fmt.Printf("Teardown was staged in this session (%s).\n", ev.evidence)
+		if err := destroyWorkspace(wsName, wsDir, hostname, false, ev.branchOverride(), false, &ev); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: staged teardown failed: %v\n", err)
+		}
+	case staged:
+		// The workspace changed between staging and exit; don't destroy
+		// work on the strength of a stale request.
+		_ = os.Remove(stagedTeardownMarker(wsDir))
+		fmt.Printf("Teardown was staged in this session, but %s is no longer safe to remove:\n", wsName)
+		for _, r := range ev.reasons {
+			fmt.Printf("  - %s\n", r)
+		}
+		fmt.Println("Staging cleared; run `slate done` again once the work has landed.")
+	case stale:
+		fmt.Printf("A staged teardown for %s no longer matches the workspace's state; staging cleared - run `slate done` again once ready.\n", wsName)
+	case ev.ok && ev.hasWork && interactive:
+		if declined, _ := os.ReadFile(teardownDeclinedMarker(wsDir)); strings.TrimSpace(string(declined)) == ev.tip {
+			return // already asked about exactly this state; don't nag
+		}
+		fmt.Printf("Work landed (%s). Tear down %s? [y/N] ", ev.evidence, wsName)
+		reader := bufio.NewReader(os.Stdin)
+		answer, _ := reader.ReadString('\n')
+		if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+			_ = createMarkerFile(teardownDeclinedMarker(wsDir), []byte(ev.tip+"\n"))
+			return
+		}
+		if err := destroyWorkspace(wsName, wsDir, hostname, false, ev.branchOverride(), false, &ev); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: teardown failed: %v\n", err)
+		}
+	}
 }

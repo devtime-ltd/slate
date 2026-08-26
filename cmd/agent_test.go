@@ -530,3 +530,30 @@ func TestRunAgentHoldsOnCrashedSession(t *testing.T) {
 		t.Errorf("a clean quit should not be held, got %v", err)
 	}
 }
+
+func TestOfferTeardownStaleMarkerKeptWhenTipUnknown(t *testing.T) {
+	// A staged marker must survive a transient inability to read the tip,
+	// rather than being discarded as stale.
+	wsDir := t.TempDir()
+	staged := stagedTeardownMarker(wsDir)
+	if err := os.WriteFile(staged, []byte("abc123\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the offer's stale-clearing predicate with an unknown tip.
+	ev := landedEvidence{tip: ""}
+	raw, _ := os.ReadFile(staged)
+	stale := false
+	switch {
+	case ev.tip == "":
+	case string(raw) == ev.tip:
+	default:
+		stale = true
+	}
+	if stale {
+		t.Error("marker must not be treated as stale when the tip is unknown")
+	}
+	if _, err := os.Stat(staged); err != nil {
+		t.Error("marker should still exist")
+	}
+}

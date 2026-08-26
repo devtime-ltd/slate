@@ -45,6 +45,7 @@ func briefText(cfg config.ProjectConfig) string {
 		"\n" +
 		"- Target a workspace non-interactively: set `SLATE_WORKSPACE=<name>` (honoured by every command) or run from inside its worktree. Never rely on interactive pickers or prompts.\n" +
 		"- Lifecycle: `slate new <name>` | `slate up` | `slate down` | `slate rm -f <name>` | `slate ls`\n" +
+		"- Finishing up: when the user confirms the work is merged, run `slate done` - it verifies the work landed (merged PR or branch ancestry, clean worktree) before tearing anything down. Inside a workspace's own agent session it stages the teardown to fire when the session exits, so make it your last action there; from a session at the main checkout, `slate done <name>` tears the workspace down immediately. If it refuses, report its reasons rather than forcing - `slate rm -f` is the explicit destructive path.\n" +
 		"- Run anything in the app container: `slate exec -- <cmd>` (no TTY, stdin forwarded; `-s <service>` for other containers)\n" +
 		"- App URL: `https://<project>--<workspace>.test`; logs: `slate logs [service]`\n" +
 		"- A workspace may still be provisioning in the background right after creation (`SLATE_PROVISIONING=1` in this session's env means it started that way). `slate exec` and the tool shortcuts wait for it automatically; run `slate wait` to block until it's ready explicitly (instant when already up, non-zero exit + log tail if provisioning failed).\n")
