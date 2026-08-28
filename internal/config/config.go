@@ -51,22 +51,26 @@ type DBTool struct {
 func (DBTool) isTool() {}
 
 type ProjectConfig struct {
-	Scaffold ScaffoldRef         `yaml:"scaffold"`
-	Project  string              `yaml:"project"`
-	Database string              `yaml:"database"`
-	Editor   string              `yaml:"editor"`
-	Fresh    string              `yaml:"fresh"`
-	Setup    string              `yaml:"setup"`
-	Env      map[string]string   `yaml:"env"`
-	AppPort  int                 `yaml:"app_port"`
-	VitePort int                 `yaml:"vite_port"`
-	Tools    map[string]ExecTool `yaml:"tools"`
-	Agent    AgentCmd            `yaml:"agent"`
-	New      string              `yaml:"new"`
-	Up       string              `yaml:"up"`
-	Doctor   map[string]string   `yaml:"doctor"`
-	Brief    string              `yaml:"brief"`
-	Extra    map[string]any      `yaml:",inline"`
+	Scaffold ScaffoldRef `yaml:"scaffold"`
+	Project  string      `yaml:"project"`
+	Database string      `yaml:"database"`
+	Editor   string      `yaml:"editor"`
+	// BaseBranch is the branch new workspaces fork from; empty means the
+	// repo's default branch. BaseFromHead forks from the main checkout's HEAD.
+	BaseBranch   string              `yaml:"base_branch"`
+	BaseFromHead bool                `yaml:"base_from_head"`
+	Fresh        string              `yaml:"fresh"`
+	Setup        string              `yaml:"setup"`
+	Env          map[string]string   `yaml:"env"`
+	AppPort      int                 `yaml:"app_port"`
+	VitePort     int                 `yaml:"vite_port"`
+	Tools        map[string]ExecTool `yaml:"tools"`
+	Agent        AgentCmd            `yaml:"agent"`
+	New          string              `yaml:"new"`
+	Up           string              `yaml:"up"`
+	Doctor       map[string]string   `yaml:"doctor"`
+	Brief        string              `yaml:"brief"`
+	Extra        map[string]any      `yaml:",inline"`
 }
 
 // ScaffoldRef is a built-in scaffold name, or an inline scaffold when

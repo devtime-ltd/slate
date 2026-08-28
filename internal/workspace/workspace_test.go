@@ -339,6 +339,105 @@ func TestCreateWorktreeBase(t *testing.T) {
 	}
 }
 
+// A branch with only a remote copy is forkable via its remote-tracking ref,
+// and forking from one must not adopt it as the new branch's upstream.
+func TestForkableRefFromRemote(t *testing.T) {
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	repo := t.TempDir()
+	git(repo, "init", "-q", "-b", "main")
+	git(repo, "config", "user.email", "t@example.com")
+	git(repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(repo, "add", ".")
+	git(repo, "commit", "-qm", "base")
+	git(repo, "update-ref", "refs/remotes/origin/dev", "HEAD")
+	git(repo, "commit", "-qm", "later", "--allow-empty")
+
+	for _, c := range []struct{ branch, want string }{
+		{"main", "main"},
+		{"dev", "origin/dev"},
+		{"nope", ""},
+		{"", ""},
+	} {
+		if got := ForkableRef(repo, c.branch); got != c.want {
+			t.Errorf("ForkableRef(%q) = %q, want %q", c.branch, got, c.want)
+		}
+	}
+	if !BranchExists(repo, "main") || BranchExists(repo, "dev") {
+		t.Error("BranchExists should see only local branches")
+	}
+
+	wt := filepath.Join(t.TempDir(), "remote-based")
+	if err := CreateWorktree(repo, wt, "slate/from-remote", "origin/dev"); err != nil {
+		t.Fatalf("CreateWorktree from a remote-tracking ref: %v", err)
+	}
+	if head, want := git(wt, "rev-parse", "HEAD"), git(repo, "rev-parse", "refs/remotes/origin/dev"); head != want {
+		t.Errorf("worktree HEAD = %s, want %s", head, want)
+	}
+	if upstream := git(repo, "for-each-ref", "--format=%(upstream)", "refs/heads/slate/from-remote"); upstream != "" {
+		t.Errorf("new branch tracks %s, want no upstream", upstream)
+	}
+}
+
+// The default base survives a checkout that declares no origin/HEAD and keeps
+// no local main: the conventional names still resolve through origin.
+func TestDefaultBaseRef(t *testing.T) {
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	repo := t.TempDir()
+	git(repo, "init", "-q", "-b", "main")
+	git(repo, "config", "user.email", "t@example.com")
+	git(repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(repo, "add", ".")
+	git(repo, "commit", "-qm", "base")
+	git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	git(repo, "update-ref", "refs/remotes/origin/dev", "HEAD")
+	git(repo, "checkout", "-q", "-b", "unrelated")
+
+	if got := DefaultBaseRef(repo); got != "main" {
+		t.Errorf("with a local main: %q, want main", got)
+	}
+
+	git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev")
+	if got := DefaultBaseRef(repo); got != "origin/dev" {
+		t.Errorf("with origin/HEAD on a remote-only branch: %q, want origin/dev", got)
+	}
+
+	git(repo, "symbolic-ref", "-d", "refs/remotes/origin/HEAD")
+	git(repo, "branch", "-D", "main")
+	if got := DefaultBaseRef(repo); got != "origin/main" {
+		t.Errorf("with neither origin/HEAD nor a local main: %q, want origin/main", got)
+	}
+
+	git(repo, "update-ref", "-d", "refs/remotes/origin/main")
+	git(repo, "update-ref", "-d", "refs/remotes/origin/dev")
+	if got := DefaultBaseRef(repo); got != "" {
+		t.Errorf("with no default branch anywhere: %q, want the current HEAD", got)
+	}
+}
+
 func TestShortenName(t *testing.T) {
 	tests := []struct {
 		name string

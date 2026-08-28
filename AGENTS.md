@@ -272,6 +272,7 @@ Suggested order:
 | Agent/new/up run host-side (no in-container agent) | The user's own tooling/credentials apply; slate stays vendor-neutral; containers keep isolating app code and deps |
 | Hash-suffix on DB names | Safe across all databases (max 63 chars), unique per project+workspace+label |
 | `--bg` fast/slow split | Fast phase (worktree+scaffold) runs inline so editing starts immediately; slow phase (build+lifecycle) detaches with `Setsid` and survives parent close |
+| New workspaces fork from the default branch | The main checkout's HEAD is wherever the last task left it, so it was an arbitrary base picked by accident; `base_branch`/`base_from_head` and `--base`/`--base-head` cover the deliberate exceptions |
 | Lockfile-driven status (not in-memory) | Survives slate restarts, visible across shells, single source of truth for concurrency guards |
 
 ## Coding Conventions

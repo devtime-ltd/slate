@@ -188,7 +188,7 @@ func CreateWorktree(mainRoot, dir, branch, base string) error {
 	// Asked directly rather than inferred from `worktree add -b` failure
 	// output, which lumps every "already exists" condition (branch, path)
 	// into one string.
-	if _, err := runGitIn(mainRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+	if BranchExists(mainRoot, branch) {
 		// The branch already exists - check it out into the worktree. Its
 		// history is set, so a requested base can't be honoured and silently
 		// ignoring it would be worse than refusing.
@@ -203,12 +203,36 @@ func CreateWorktree(mainRoot, dir, branch, base string) error {
 
 	args := []string{"worktree", "add", dir, "-b", branch}
 	if base != "" {
-		args = append(args, base)
+		// --no-track: forking from origin/<x> would otherwise set that as the
+		// new branch's upstream, so the workspace's first push aims at it.
+		args = append(args, "--no-track", base)
 	}
 	if out, err := runGitIn(mainRoot, args...); err != nil {
 		return fmt.Errorf("git worktree add: %s", strings.TrimSpace(out))
 	}
 	return nil
+}
+
+// BranchExists reports whether branch is a local branch in the repo at dir.
+func BranchExists(dir, branch string) bool {
+	_, err := runGitIn(dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	return err == nil
+}
+
+// ForkableRef returns the ref to fork branch from: the local branch, or its
+// origin remote-tracking ref when there is no local copy. "" when neither
+// exists (or branch is empty).
+func ForkableRef(dir, branch string) string {
+	if branch == "" {
+		return ""
+	}
+	if BranchExists(dir, branch) {
+		return branch
+	}
+	if _, err := runGitIn(dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch); err == nil {
+		return "origin/" + branch
+	}
+	return ""
 }
 
 // VerifyRef reports whether ref resolves to a commit in the repo at mainRoot.
@@ -353,6 +377,22 @@ func BranchesWithPrefix(dir, prefix string) ([]string, error) {
 		return nil, nil
 	}
 	return strings.Split(out, "\n"), nil
+}
+
+// DefaultBaseRef returns the ref new work forks from: the declared default
+// branch, else the conventional main/master, each taken locally or from
+// origin. "" when the repo has none of them.
+func DefaultBaseRef(dir string) string {
+	names := []string{"main", "master"}
+	if declared := DefaultBranch(dir); declared != "" {
+		names = append([]string{declared}, names...)
+	}
+	for _, name := range names {
+		if ref := ForkableRef(dir, name); ref != "" {
+			return ref
+		}
+	}
+	return ""
 }
 
 // DefaultBranch returns the repo's default branch (via origin/HEAD, falling

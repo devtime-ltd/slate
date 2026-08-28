@@ -4,8 +4,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/devtime-ltd/slate/internal/config"
 	"github.com/devtime-ltd/slate/internal/workspace"
 )
 
@@ -15,7 +17,7 @@ import (
 func TestCreateWorkspaceOwesFirstRunEntry(t *testing.T) {
 	mainRoot := newTestProject(t)
 
-	if err := createWorkspace("ws", "", "", false, false, false, true); err != nil {
+	if err := createWorkspace("ws", "", baseSpec{}, false, false, false, true); err != nil {
 		t.Fatalf("slate new --bare: %v", err)
 	}
 
@@ -53,4 +55,79 @@ func newTestProject(t *testing.T) string {
 	workspace.SetMainRootOverride(root)
 	t.Cleanup(func() { workspace.SetMainRootOverride("") })
 	return root
+}
+
+// baseRepo: main with one commit, a remote-only `dev`, and HEAD parked on an
+// unrelated branch so a HEAD-based fork is distinguishable from main.
+func baseRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitInitWorktree(t, dir)
+	landedGit(t, dir, "checkout", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644)
+	landedGit(t, dir, "add", ".")
+	landedGit(t, dir, "commit", "-q", "-m", "initial")
+	landedGit(t, dir, "update-ref", "refs/remotes/origin/dev", "HEAD")
+	landedGit(t, dir, "checkout", "-q", "-b", "unrelated")
+	return dir
+}
+
+func TestResolveBase(t *testing.T) {
+	repo := baseRepo(t)
+	landedGit(t, repo, "branch", "slate/existing", "main")
+	no, yes := false, true
+
+	cases := []struct {
+		name   string
+		branch string
+		spec   baseSpec
+		cfg    config.ProjectConfig
+		want   string
+	}{
+		{"defaults to the default branch", "slate/new", baseSpec{}, config.ProjectConfig{}, "main"},
+		{"--base wins", "slate/new", baseSpec{ref: "unrelated"}, config.ProjectConfig{BaseBranch: "main"}, "unrelated"},
+		{"base_branch names another branch", "slate/new", baseSpec{}, config.ProjectConfig{BaseBranch: "unrelated"}, "unrelated"},
+		{"base_branch falls back to origin", "slate/new", baseSpec{}, config.ProjectConfig{BaseBranch: "dev"}, "origin/dev"},
+		{"base_from_head keeps the old behaviour", "slate/new", baseSpec{}, config.ProjectConfig{BaseFromHead: true}, ""},
+		{"--base-head overrides the config", "slate/new", baseSpec{head: &yes}, config.ProjectConfig{}, ""},
+		{"--base-head=false overrides the config", "slate/new", baseSpec{head: &no}, config.ProjectConfig{BaseFromHead: true}, "main"},
+		{"an existing branch gets no base", "slate/existing", baseSpec{}, config.ProjectConfig{}, ""},
+	}
+	for _, c := range cases {
+		got, err := resolveBase(repo, c.branch, c.spec, c.cfg)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+		} else if got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// The default branch is a best effort: a repo without one still creates
+// workspaces, forking from wherever the main checkout sits.
+func TestResolveBaseWithoutDefaultBranch(t *testing.T) {
+	dir := t.TempDir()
+	gitInitWorktree(t, dir)
+	landedGit(t, dir, "checkout", "-q", "-b", "trunk")
+	os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644)
+	landedGit(t, dir, "add", ".")
+	landedGit(t, dir, "commit", "-q", "-m", "initial")
+
+	got, err := resolveBase(dir, "slate/new", baseSpec{}, config.ProjectConfig{})
+	if err != nil || got != "" {
+		t.Errorf("got (%q, %v), want the current HEAD and no error", got, err)
+	}
+}
+
+// A configured base_branch that doesn't resolve is a typo or a missing fetch,
+// not a licence to fork from an unrelated HEAD.
+func TestResolveBaseRejectsUnknownRefs(t *testing.T) {
+	repo := baseRepo(t)
+
+	if _, err := resolveBase(repo, "slate/new", baseSpec{}, config.ProjectConfig{BaseBranch: "nope"}); err == nil || !strings.Contains(err.Error(), "base_branch") {
+		t.Errorf("want base_branch 'nope' refused, got %v", err)
+	}
+	if _, err := resolveBase(repo, "slate/new", baseSpec{ref: "nope"}, config.ProjectConfig{}); err == nil || !strings.Contains(err.Error(), "--base") {
+		t.Errorf("want --base nope refused, got %v", err)
+	}
 }

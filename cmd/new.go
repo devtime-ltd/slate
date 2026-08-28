@@ -18,6 +18,7 @@ import (
 
 var newBranch string
 var newBase string
+var newBaseHead bool
 var newBg bool
 var newCd bool
 var newAdopt bool
@@ -33,12 +34,14 @@ var newCmd = &cobra.Command{
 
 func init() {
 	newCmd.Flags().StringVarP(&newBranch, "branch", "b", "", "Git branch name (default: slate/<name>)")
-	newCmd.Flags().StringVar(&newBase, "base", "", "Ref to branch from, e.g. main or origin/main (default: the main checkout's current HEAD)")
+	newCmd.Flags().StringVar(&newBase, "base", "", "Ref to branch from, e.g. main or origin/main (default: the repo's default branch)")
+	newCmd.Flags().BoolVar(&newBaseHead, "base-head", false, "Branch from the main checkout's current HEAD instead of the default branch (default from base_from_head)")
 	newCmd.Flags().BoolVar(&newBg, "bg", false, "Run container build + lifecycle in the background")
 	newCmd.Flags().BoolVar(&newCd, "cd", false, "Spawn a shell in the workspace directory (default from global auto_cd; pass --cd=false to opt out)")
 	newCmd.Flags().BoolVar(&newAdopt, "adopt", false, "Carry uncommitted changes from the main checkout into the new worktree")
 	newCmd.Flags().BoolVar(&newBare, "bare", false, "Worktree + scaffold only, no containers (provision later with `slate up`)")
 	newCmd.MarkFlagsMutuallyExclusive("bare", "bg")
+	newCmd.MarkFlagsMutuallyExclusive("base", "base-head")
 	newCmd.GroupID = "workspace"
 	rootCmd.AddCommand(newCmd)
 }
@@ -52,7 +55,11 @@ func runNew(cmd *cobra.Command, args []string) error {
 		}
 		name = shorter
 	}
-	return createWorkspace(name, newBranch, newBase, newBg, resolveAutoCd(cmd, "cd", newCd), newAdopt, newBare)
+	base := baseSpec{ref: newBase}
+	if cmd.Flags().Changed("base-head") {
+		base.head = &newBaseHead
+	}
+	return createWorkspace(name, newBranch, base, newBg, resolveAutoCd(cmd, "cd", newCd), newAdopt, newBare)
 }
 
 // offerShorterName rescues a too-long `slate new` name with a whole-word
@@ -75,7 +82,44 @@ func offerShorterName(name string, verr error) (string, error) {
 	return suggestion, nil
 }
 
-func createWorkspace(name, branch, base string, bg, cd, adopt, bare bool) error {
+// baseSpec is what the flags asked for. The zero value defers to the project
+// config, and a nil head to its base_from_head.
+type baseSpec struct {
+	ref  string
+	head *bool
+}
+
+// resolveBase picks the ref the new branch forks from, "" meaning the main
+// checkout's current HEAD. --base wins, then --base-head / base_from_head,
+// otherwise base_branch or the repo's default branch - falling back to HEAD
+// when the repo has neither.
+func resolveBase(mainRoot, branch string, spec baseSpec, cfg config.ProjectConfig) (string, error) {
+	if spec.ref != "" {
+		if err := workspace.VerifyRef(mainRoot, spec.ref); err != nil {
+			return "", fmt.Errorf("--base %w", err)
+		}
+		return spec.ref, nil
+	}
+	fromHead := cfg.BaseFromHead
+	if spec.head != nil {
+		fromHead = *spec.head
+	}
+	// An existing branch is checked out as it stands, and CreateWorktree
+	// refuses a base it can't honour, so don't hand it one.
+	if fromHead || workspace.BranchExists(mainRoot, branch) {
+		return "", nil
+	}
+	if cfg.BaseBranch != "" {
+		ref := workspace.ForkableRef(mainRoot, cfg.BaseBranch)
+		if ref == "" {
+			return "", fmt.Errorf("base_branch '%s' from slate.yml is neither a local branch nor origin/%s; fetch it, or pass --base <ref>", cfg.BaseBranch, cfg.BaseBranch)
+		}
+		return ref, nil
+	}
+	return workspace.DefaultBaseRef(mainRoot), nil
+}
+
+func createWorkspace(name, branch string, spec baseSpec, bg, cd, adopt, bare bool) error {
 	// Bare creation touches only git and generated files; it must work
 	// without Docker installed.
 	if !bare {
@@ -124,11 +168,12 @@ func createWorkspace(name, branch, base string, bg, cd, adopt, bare bool) error 
 		return fmt.Errorf("creating workspaces dir: %w", err)
 	}
 
+	// resolved before any worktree mutation so a typo'd ref fails clean
+	base, err := resolveBase(mainRoot, branch, spec, cfg)
+	if err != nil {
+		return err
+	}
 	if base != "" {
-		// checked before any worktree mutation so a typo'd ref fails clean
-		if err := workspace.VerifyRef(mainRoot, base); err != nil {
-			return fmt.Errorf("--base %w", err)
-		}
 		fmt.Printf("Creating worktree (branch: %s, from %s)...\n", branch, base)
 	} else {
 		fmt.Printf("Creating worktree (branch: %s)...\n", branch)
