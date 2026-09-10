@@ -30,6 +30,11 @@ var doctorCmd = &cobra.Command{
 func runDoctor(cmd *cobra.Command, args []string) error {
 	fmt.Println("Checking slate dependencies...")
 	allOK := true
+	if others := otherSlatesOnPath(); len(others) > 0 {
+		fmt.Printf("  "+warn()+" slate %s, but other slate binaries are on PATH: %s\n", buildVersion(), strings.Join(others, ", "))
+	} else {
+		fmt.Printf("  "+tick()+" slate %s\n", buildVersion())
+	}
 
 	check := func(ok bool, label string) {
 		if ok {
