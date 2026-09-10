@@ -105,3 +105,18 @@ func TestHookTimeoutKillsProcessGroup(t *testing.T) {
 	syscall.Kill(pid, syscall.SIGKILL)
 	t.Error("the hook's child process survived the timeout")
 }
+
+func TestVersionWord(t *testing.T) {
+	cases := map[string]string{
+		"Docker version 29.4.0, build 9d7ad9f\n": "29.4.0",
+		"git version 2.50.1 (Apple Git-155)":     "2.50.1",
+		"tmux 3.7b":                              "3.7b",
+		"herd v1.2.3":                            "v1.2.3",
+		"no number here":                         "no number here",
+	}
+	for out, want := range cases {
+		if got := versionWord(out); got != want {
+			t.Errorf("versionWord(%q) = %q, want %q", out, got, want)
+		}
+	}
+}
