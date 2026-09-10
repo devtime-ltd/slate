@@ -35,6 +35,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Printf("  "+tick()+" slate %s\n", buildVersion())
 	}
+	reportLatestRelease(os.Stdout, releasesURL, build().tag(), newUpdateCheck())
 
 	check := func(ok bool, label string) {
 		if ok {
