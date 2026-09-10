@@ -231,13 +231,13 @@ At an interactive terminal, slate drops you into the workspace (the `auto_cd` be
 
 ```yaml
 agent:
-  - claude --name "{{PROJECT}}--{{WORKSPACE}}"   # first run (SLATE_FRESH=1)
+  - claude --name "{{PROJECT}}--{{WORKSPACE}}"   # first run
   - claude --continue                            # thereafter
 new: slate agent   # slate new: runs immediately, containers provision behind it
 up: slate agent    # slate up: runs after provisioning finishes
 ```
 
-`agent` is either a single command or a `[first-run, thereafter]` pair; the first-run variant is picked on the workspace's first agent entry, which slate records in `.slate/agent-started` once a session has actually run. A fresh `slate new` (`SLATE_FRESH=1`) and a bare workspace both count as that first entry. With the pair above, every new workspace starts a claude session named `<project>--<workspace>` (resumable later with `claude --resume <name>`), and re-entry continues where you left off.
+`agent` is either a single command or a `[first-run, thereafter]` pair; the first-run variant is picked on the workspace's first agent entry, whichever way that entry is reached. `slate new` records the debt in `.slate/agent-first-run-pending` and the first session that actually runs settles it, writing `.slate/agent-started`. Because the debt lives in the workspace, an entry that carries no context of its own - a `slate agent` in a tmux session or a shell opened later, rather than through the hooks - still gets the first-run variant it is owed. Workspaces created before the debt marker existed fall back to the older signals, `SLATE_FRESH=1` and bareness. With the pair above, every new workspace starts a claude session named `<project>--<workspace>` (resumable later with `claude --resume <name>`), and re-entry continues where you left off.
 
 With `new:` configured, `slate new foo` needs no flags and no waiting: the worktree and scaffold are created inline (seconds), provisioning forks to the background, and the hook runs immediately, so you brief your agent while the containers come up. The hook's session gets `SLATE_PROVISIONING=1` (0 otherwise) so tooling can tell it started mid-provision, and `slate exec` plus the scaffold tools block on the in-flight provision automatically, so the agent's first container command simply waits instead of failing. `slate wait` is the explicit check (instant when ready, non-zero exit with the log tail when provisioning failed); the `slate brief` cheatsheet tells your agent about it. Both hooks sit behind the same interactive-terminal gate as `auto_cd`, so scripts and CI invoking `slate new` still provision synchronously.
 
@@ -248,7 +248,7 @@ All three commands run in the worktree via `sh -c` with `{{WORKSPACE}}`, `{{PROJ
 up: tmux new-session -A -s {{HOSTNAME}} 'slate agent'
 ```
 
-(`tmux new -A` re-attaches an existing server session, which keeps its original environment, so `SLATE_FRESH` only reaches `slate agent` on the session that created the server.)
+(`tmux new -A` re-attaches an existing server session, which keeps its original environment, so `SLATE_FRESH` doesn't reliably reach `slate agent` here. The first-run variant is picked from the workspace's recorded debt rather than the environment, so this doesn't affect which variant runs.)
 
 `slate agent` passes anything after `--` through to the agent command as extra arguments, appended to whichever variant runs (the first-run retry included): `slate agent myws -- "review the open PR"` runs `claude "review the open PR"` under the example config above. The args are shell-escaped into literal words, so a prompt containing quotes or shell syntax stays a single argument, and nothing the command does to its positional parameters can lose them. Appending is only well-defined for a plain simple command, so an `agent:` containing any shell structure (pipelines, lists, redirects, subshells, comments) is refused when args are passed unless `{{ARGS}}` marks where they belong, e.g. `agent: claude {{ARGS}} | tee agent.log`. `{{ARGS}}` works in simple commands too and expands to nothing when no args are given.
 
@@ -291,7 +291,7 @@ brief: |
 An agent command that returns straight away hasn't hosted a session, whatever its exit code. `claude --continue` with no conversation to continue prints its complaint and exits (0 or 1, depending on the claude build), which reads as a clean quit or an ordinary command failure: either way it takes any enclosing tmux session down with it and nothing records that the session never happened. Slate treats an `agent:` command that exits within three seconds as a failed launch instead of a clean exit:
 
 - it reports which variant ran, how long it lasted, its exit code and the expanded command;
-- it doesn't record the workspace's first agent entry, so the next `slate agent` still gets the first-run variant rather than inheriting the failure; a failed first-run launch is remembered (`.slate/agent-first-run-pending`), because the freshness signals (`SLATE_FRESH`, bareness) are gone by the next invocation and the entry would otherwise fall through to the thereafter variant with the first-run command still owed;
+- it doesn't record the workspace's first agent entry, so the next `slate agent` still gets the first-run variant rather than inheriting the failure; a failed first-run launch re-records the first-run debt (`.slate/agent-first-run-pending`), so the next entry still gets the first-run command it is owed;
 - if the *thereafter* variant is what bailed, it retries the first-run variant once: a `--continue` that returns at once means the session it assumed isn't there, so the first-run command is the one that should have run. Signal deaths and exits meaning the command itself couldn't run (126/127) don't retry: the first is the launch being stopped, the second a config problem that retrying the other variant would mask;
 - it records every run's outcome (timestamp, variant, exit code, duration, command) in the workspace's `.slate/agent-last-run`, so even a launch that takes its tmux session down leaves evidence;
 - at a terminal it leaves a shell in the workspace instead of returning, so a tmux session wrapping `slate agent` survives with the diagnostic on screen. `slate agent --no-hold` exits instead, as does any non-interactive invocation.
