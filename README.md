@@ -15,20 +15,25 @@ To **run** slate you also need Docker ([OrbStack](https://orbstack.dev) on macOS
 go install github.com/devtime-ltd/slate@latest
 ```
 
-Or build from a checkout:
+Or from a checkout:
 
 ```sh
 git clone https://github.com/devtime-ltd/slate.git
 cd slate
-go build -o slate .          # produces ./slate
-# optionally move it onto your PATH:
-sudo mv slate /usr/local/bin/
+go install .
 ```
 
-Make sure the install target is on your `PATH` (for `go install`, add `$(go env GOBIN)`, or `$(go env GOPATH)/bin` if `GOBIN` is unset). Verify with:
+Both land in the same place, `$(go env GOBIN)` or `$(go env GOPATH)/bin` if `GOBIN` is unset, so a rebuild replaces the binary you already run. Keep that one directory on your `PATH` and don't copy the binary elsewhere: `slate version` and `slate doctor` warn when another `slate` is on `PATH`, since the shell may be running a stale one. Verify with:
 
 ```sh
+slate version            # e.g. slate dev (57ce7762d6aa 2026-09-10T11:47:21Z)
 slate doctor             # checks Docker, Git, and proxy status
+```
+
+Either install reports the commit it was built from and that commit's date, taken from the build info Go embeds; a build from a clean checkout at a tag reports the tag in place of `dev`. To stamp a version by hand, for instance when packaging a release, set it with ldflags (`commit` and `date` can be set the same way):
+
+```sh
+go install -ldflags "-X github.com/devtime-ltd/slate/cmd.version=v1.2.3" .
 ```
 
 ## Quick Start
@@ -61,6 +66,7 @@ Tools:
   slate setup                     One-time host setup (proxy + DNS + CA cert + secret key)
   slate teardown                  Remove all slate infrastructure
   slate doctor                    Check dependencies
+  slate version                   Print the build version, commit and date
   slate brief                     Print an agent-facing cheatsheet for this project
   slate open [name]               Open workspace URL in browser
   slate path [name]               Print workspace path (pipeable, --open)
