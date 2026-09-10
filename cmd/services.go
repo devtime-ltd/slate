@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/devtime-ltd/slate/internal/dockernet"
 	"github.com/devtime-ltd/slate/internal/proxy"
 	"github.com/devtime-ltd/slate/internal/scaffold"
+	"github.com/devtime-ltd/slate/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -105,11 +107,11 @@ func lifecycleLabel(fresh bool) string {
 }
 
 // runWorkspaceLifecycle runs the slow phase of bringing a workspace up:
-// optional wipe, compose up, lifecycle script, queue restart, proxy register,
-// then prints the success message + URL block. Shared by runNew, runUp,
-// and the bg _provision worker. Manages the .slate/provisioning lockfile so
-// concurrent `slate ls` calls see the in-flight status, and any stale
-// .failed marker is cleared on a successful run.
+// optional wipe, compose up, lifecycle script (workers paused around it),
+// proxy register, then prints the success message + URL block. Shared by
+// runNew, runUp, and the bg _provision worker. Manages the .slate/provisioning
+// lockfile so concurrent `slate ls` calls see the in-flight status, and any
+// stale .failed marker is cleared on a successful run.
 func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg config.ProjectConfig, proxyConfig config.GlobalConfig, opts provisionOpts) (retErr error) {
 	cleanup := writeProvisioningLock(wsDir)
 	defer func() { cleanup(retErr) }()
@@ -149,11 +151,14 @@ func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg co
 		}
 	}
 
+	workers := workerServices(env, cfg)
 	if lifecycleScript := scaffold.BuildLifecycleScript(cfg, opts.fresh); lifecycleScript != "" {
-		fmt.Printf("Running lifecycle (%s)...\n", lifecycleLabel(opts.fresh))
-		if err := compose.Exec(env, "app", "sh", "-c", lifecycleScript); err != nil {
-			return fmt.Errorf("lifecycle failed: %w", err)
+		if err := runLifecycleScript(env, workers, lifecycleScript, opts.fresh); err != nil {
+			return err
 		}
+	} else if len(workers) > 0 {
+		// workers don't hot-reload
+		warnOnWorkerStart(compose.Run(env, append([]string{"restart"}, workers...)...))
 	}
 
 	// Clear the bare marker the moment the lifecycle lands, not at the end:
@@ -165,13 +170,6 @@ func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg co
 		return fmt.Errorf("could not clear the unprovisioned marker: %w\n\nRemove %s manually; while it exists every `slate up` reruns the fresh lifecycle (database wipe)", err, unprovisionedMarker(wsDir))
 	}
 
-	// Restart worker services (app-like beyond the primary); they don't hot-reload.
-	if appLike := appLikeServices(env, cfg); len(appLike) > 1 {
-		for _, svc := range appLike[1:] {
-			_ = compose.Run(env, "restart", svc)
-		}
-	}
-
 	services := buildServicePorts(env, cfg)
 	if err := proxy.Register(hostname, services); err != nil {
 		return fmt.Errorf("proxy registration failed: %w", err)
@@ -181,6 +179,27 @@ func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg co
 	fmt.Println(tick() + " " + name + " ready")
 	fmt.Println()
 	fmt.Println(workspaceURLBlock(env, hostname, cfg, proxyConfig))
+	return nil
+}
+
+// runLifecycleScript runs the script with the worker services stopped (a live
+// queue worker deadlocks against its migrations), holding SIGINT until they
+// are started again.
+func runLifecycleScript(env compose.Env, workers []string, script string, fresh bool) error {
+	if len(workers) > 0 {
+		release := holdInterrupts()
+		defer release()
+		defer func() {
+			warnOnWorkerStart(compose.Run(env, append([]string{"start"}, workers...)...))
+		}()
+		if err := compose.Run(env, append([]string{"stop"}, workers...)...); err != nil {
+			return fmt.Errorf("pausing worker services for the lifecycle: %w", err)
+		}
+	}
+	fmt.Printf("Running lifecycle (%s)...\n", lifecycleLabel(fresh))
+	if err := compose.Exec(env, "app", "sh", "-c", script); err != nil {
+		return fmt.Errorf("lifecycle failed: %w", err)
+	}
 	return nil
 }
 
@@ -286,6 +305,72 @@ func writeFileAtomic(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// workerServices: the app-like services beyond the primary (e.g. queue).
+func workerServices(env compose.Env, cfg config.ProjectConfig) []string {
+	if appLike := appLikeServices(env, cfg); len(appLike) > 1 {
+		return appLike[1:]
+	}
+	return nil
+}
+
+// pauseWorkers stops the currently-running worker services, holding SIGINT,
+// and returns a restore func that starts exactly those again and releases the
+// hold, so a worker the user had stopped themselves stays stopped. The service
+// the command runs in cannot be one of them.
+func pauseWorkers(env compose.Env, wsDir, service string) (func(), error) {
+	mainRoot, err := workspace.MainRoot()
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := config.LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		return nil, err
+	}
+	workers := workerServices(env, cfg)
+	if slices.Contains(workers, service) {
+		return nil, fmt.Errorf("--pause-workers would stop %s, the service the command runs in", service)
+	}
+	if len(workers) == 0 {
+		return func() {}, nil
+	}
+	live, err := compose.LiveServices(env)
+	if err != nil {
+		return nil, err
+	}
+	paused := liveWorkers(workers, live)
+	if len(paused) == 0 {
+		return func() {}, nil
+	}
+	release := holdInterrupts()
+	restore := func() {
+		warnOnWorkerStart(compose.Run(env, append([]string{"start"}, paused...)...))
+		release()
+	}
+	// an interrupted stop may already have stopped some of them
+	if err := compose.Run(env, append([]string{"stop"}, paused...)...); err != nil {
+		restore()
+		return nil, fmt.Errorf("stopping worker services: %w", err)
+	}
+	return restore, nil
+}
+
+// liveWorkers keeps the workers that are in the live set, in worker order.
+func liveWorkers(workers, live []string) []string {
+	var out []string
+	for _, w := range workers {
+		if slices.Contains(live, w) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func warnOnWorkerStart(err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: the worker services were not started again (%v); `slate up` starts them\n", err)
+	}
 }
 
 // appLikeServices: static for built-in scaffolds, compose-derived for inline

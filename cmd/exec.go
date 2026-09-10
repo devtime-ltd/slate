@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
 
@@ -39,8 +40,9 @@ var shellCmd = &cobra.Command{
 }
 
 var (
-	execService     string
-	execInteractive bool
+	execService      string
+	execInteractive  bool
+	execPauseWorkers bool
 )
 
 var execCmd = &cobra.Command{
@@ -55,9 +57,14 @@ Runs without a TTY by default so it's safe in scripts and CI; stdin is still
 forwarded, so you can pipe input in. Pass -i/--interactive for a TTY-backed
 session (REPLs, prompts).
 
+Destructive database commands (migrate:fresh, db:wipe) deadlock against a
+live queue worker's polling; --pause-workers stops the running worker
+services for the duration and starts them again after.
+
 Examples:
   slate exec -- ./vendor/bin/phpstan analyse
   slate exec -- php artisan migrate --force
+  slate exec --pause-workers -- php artisan migrate:fresh --seed
   slate exec -s vite -- npm run build
   slate exec -i -- php artisan tinker`,
 	GroupID: "tools",
@@ -77,6 +84,13 @@ Examples:
 		env, err := compose.NewEnv(wsName, wsDir, hostname)
 		if err != nil {
 			return err
+		}
+		if execPauseWorkers {
+			restore, err := pauseWorkers(env, wsDir, execService)
+			if err != nil {
+				return err
+			}
+			defer restore()
 		}
 		if execInteractive {
 			runArgs := append([]string{"exec", execService}, args...)
@@ -287,6 +301,14 @@ func registerDBCommand(name string, t config.DBTool) {
 	rootCmd.AddCommand(dbCmd)
 }
 
+// holdInterrupts keeps slate alive through a Ctrl-C so its deferred cleanup
+// runs; the command under exec still receives it via the shared process group.
+func holdInterrupts() (release func()) {
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	return func() { signal.Stop(interrupts) }
+}
+
 func init() {
 	shellCmd.GroupID = "tools"
 	logsCmd.GroupID = "tools"
@@ -296,6 +318,7 @@ func init() {
 	execCmd.Flags().SetInterspersed(false)
 	execCmd.Flags().StringVarP(&execService, "service", "s", "app", "Container/service to run the command in")
 	execCmd.Flags().BoolVarP(&execInteractive, "interactive", "i", false, "Allocate a TTY (for interactive commands)")
+	execCmd.Flags().BoolVar(&execPauseWorkers, "pause-workers", false, "Stop running worker services (e.g. queue) around the command, starting them again after")
 
 	rootCmd.AddCommand(shellCmd)
 	rootCmd.AddCommand(logsCmd)

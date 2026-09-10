@@ -111,11 +111,13 @@ slate exec -- ./vendor/bin/phpstan analyse
 slate exec -- php artisan migrate --force
 slate exec -s vite -- npm run build      # target a different service (default: app)
 slate exec -i -- php artisan tinker      # allocate a TTY for REPLs and prompts
+slate exec --pause-workers -- php artisan migrate:fresh --seed   # stop the queue worker for the duration
 ```
 
 - Runs **without a TTY** by default, so it's safe in scripts, CI, and agents. stdin is still forwarded, so you can pipe input in. Pass `-i/--interactive` when the command needs a terminal.
-- Flag parsing stops at the first positional, so the target command's own flags pass straight through (`slate exec ./vendor/bin/phpstan analyse --memory-limit=1G`); the `--` is optional but makes intent clear. Slate's own flags (`-s`, `-i`, `-w`) go before the command.
+- Flag parsing stops at the first positional, so the target command's own flags pass straight through (`slate exec ./vendor/bin/phpstan analyse --memory-limit=1G`); the `--` is optional but makes intent clear. Slate's own flags (`-s`, `-i`, `-w`, `--pause-workers`) go before the command.
 - The workspace is selected like everywhere else: `-w/--workspace`, `SLATE_WORKSPACE`, or the current directory.
+- `--pause-workers` stops the worker services that are running (the queue) for the duration and starts exactly those again after, whether the command succeeds, fails or is interrupted: a live `queue:work` polls the database on every loop iteration and deadlocks against `migrate:fresh`. It is refused when `-s` names one of those workers.
 
 ## How It Works
 
@@ -206,6 +208,7 @@ Lifecycle hooks (run inside the containers):
 - **`fresh`**: runs after `setup` on `slate new` and `slate up --fresh` (default: fresh DB seed)
 - Use `{{SCAFFOLD_DEFAULT}}` to inject the scaffold's defaults at any point in your override
 - A `retry <cmd>` shell helper is available inside hooks (3 attempts, linear backoff); wrap any flaky network step, e.g. `retry composer install`
+- Worker services (e.g. the queue) are stopped while the hooks run and started after: a live `queue:work` polls the database on every loop iteration and deadlocks against the hooks' migrations. Destructive commands run by hand against a live stack want the same pause; use `slate exec --pause-workers -- php artisan migrate:fresh --seed`
 
 Placeholders (expanded at workspace creation):
 - `{{SCAFFOLD_DEFAULT}}`: scaffold's default script (lifecycle hooks only)
@@ -334,7 +337,7 @@ scaffold:
 - **`compose`** is a committed, project-relative compose file, copied into each workspace's `.slate/compose.yaml`. Its content comes from the workspace branch's committed copy, or the main checkout when the branch doesn't commit one, never from the worktree's working files (a compose file defines mounts, so it's host-reaching config; see [Project Config](#project-config)). Follow the conventions the built-in scaffolds use: bind-mount the worktree as `..:/app`, publish container ports without host numbers (`ports: ["8081"]`) so Docker assigns free ones, and optionally mount `${SLATE_ENTRYPOINT}` as the entrypoint for slate's UID mapping. `${MAIN_ROOT}`, `${APP_UID}`, and `${APP_GID}` interpolate as usual. The Dockerfile is committed too and referenced directly (`build: {context: .., dockerfile: slate/Dockerfile}`).
 - **`subdomains`** declares the HTTPS routes: which service and container port each hostname proxies to. `"@"` is the apex, i.e. the main workspace hostname (quoted, since YAML reserves a bare `@`).
 - Everything else stays in the ordinary keys: `setup:` / `fresh:` (inline scaffolds have no defaults), `tools:`, `env:`, `files:`.
-- Services that bind-mount `/app` get the built-ins' app-like treatment: `app` is the primary (runs the lifecycle, default target for `slate exec`), the rest are restarted after each setup run since they don't hot-reload.
+- Services that bind-mount `/app` get the built-ins' app-like treatment: `app` is the primary (runs the lifecycle, default target for `slate exec`), the rest are stopped while the lifecycle runs and started after (a live worker deadlocks against its migrations, and they don't hot-reload).
 
 Name the compose file with a `.tmpl` extension to run it through Go's text/template on the way in, with `vars:` as free-form input:
 

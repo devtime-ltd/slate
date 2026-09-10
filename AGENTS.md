@@ -47,7 +47,17 @@ slate (Go binary)
 
 `slate new|up --bg` forks a hidden `_provision` subcommand with `Setsid` so it survives the parent shell closing. The forked worker:
 1. Writes `.slate/<workspace>/.slate/provisioning` with its PID.
-2. Runs the slow phase (optional `compose down -v`, `compose up`, lifecycle script, queue restart, proxy register).
+2. Runs the slow phase (optional `compose down -v`, `compose up`, workers
+   stopped, lifecycle script, workers started, proxy register). Workers
+   (`workerServices`, the app-like services beyond the primary) are paused
+   around the lifecycle because a live `queue:work` polls the database each
+   loop iteration and deadlocks against migrations; on a no-lifecycle up they
+   are restarted instead, since they don't hot-reload code. `slate exec
+   --pause-workers` (`pauseWorkers`) offers the same pause for ad-hoc
+   destructive commands, stopping only workers that were running and
+   restoring exactly those. Both hold SIGINT (`holdInterrupts`) while workers
+   are stopped, so a Ctrl-C ends the command under them and slate still
+   starts the workers again; a start that fails warns and names `slate up`.
 3. On success removes the lock; on error renames it to `.slate/provisioning.failed`.
 
 `slate ls` consults the lockfile (PID liveness via `signal(0)`, Unix-only) to render yellow "provisioning" or red "failed". `slate up`/`restart` refuse while a live lock exists; `slate rm` SIGTERMs the lock pid as the escape hatch.
