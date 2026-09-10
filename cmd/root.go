@@ -32,8 +32,12 @@ var (
 	groupScaffold  = &cobra.Group{ID: "scaffold", Title: "Scaffold tools (from slate.yml):"}
 )
 
-func Execute() error {
+// pendingUpdate is the check started for the running command.
+var pendingUpdate *updateCheck
+
+func init() {
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		pendingUpdate = nil
 		if projectOverride != "" {
 			path, err := resolveProjectPath(projectOverride)
 			if err != nil {
@@ -52,11 +56,29 @@ func Execute() error {
 		if ws != "" {
 			workspace.SetWorkspaceOverride(ws)
 		}
+
+		if !skipsUpdateCheck(cmd) {
+			pendingUpdate = updateChecker()
+			pendingUpdate.start()
+		}
 		return nil
 	}
+	rootCmd.PersistentPostRun = func(cmd *cobra.Command, args []string) {
+		pendingUpdate.finish(cmd.ErrOrStderr())
+		pendingUpdate = nil
+	}
+}
 
+func Execute() error {
 	registerToolCommands()
-	return rootCmd.Execute()
+	err := rootCmd.Execute()
+	// cobra skips the post hooks when the command fails: keep an answer that
+	// arrived, but never put a notice under an error
+	if err != nil {
+		pendingUpdate.finish(nil)
+		pendingUpdate = nil
+	}
+	return err
 }
 
 func resolveProjectPath(nameOrPath string) (string, error) {

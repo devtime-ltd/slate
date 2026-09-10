@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/semver"
 )
 
 // Set with -ldflags "-X github.com/devtime-ltd/slate/cmd.version=v1.2.3"
@@ -36,18 +37,30 @@ func printVersion(cmd *cobra.Command) {
 	if others := otherSlatesOnPath(); len(others) > 0 {
 		fmt.Fprintf(cmd.ErrOrStderr(), "  warning: other slate binaries on PATH: %s\n", strings.Join(others, ", "))
 	}
+	if notice := updateChecker().cachedNotice(); notice != "" {
+		fmt.Fprintln(cmd.ErrOrStderr(), "  "+notice)
+	}
 }
 
 // go derives the main module's version from git: a tag on a clean checkout,
 // else a pseudo-version carrying the commit time and hash.
 var pseudoVersion = regexp.MustCompile(`[-.](\d{14})-([0-9a-f]{12})`)
 
-func buildVersion() string {
-	info, _ := debug.ReadBuildInfo()
-	return versionFrom(version, commit, date, info)
+type buildInfo struct {
+	version, commit, date string
+	modified              bool
 }
 
-func versionFrom(v, c, d string, info *debug.BuildInfo) string {
+func build() buildInfo {
+	info, _ := debug.ReadBuildInfo()
+	return buildFrom(version, commit, date, info)
+}
+
+func buildVersion() string {
+	return build().String()
+}
+
+func buildFrom(v, c, d string, info *debug.BuildInfo) buildInfo {
 	modified := false
 	if info != nil {
 		for _, s := range info.Settings {
@@ -77,7 +90,7 @@ func versionFrom(v, c, d string, info *debug.BuildInfo) string {
 			v = main
 		}
 	}
-	return formatVersion(v, c, d, modified)
+	return buildInfo{version: v, commit: c, date: d, modified: modified}
 }
 
 func pseudoVersionTime(stamp string) string {
@@ -88,21 +101,34 @@ func pseudoVersionTime(stamp string) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-func formatVersion(version, commit, date string, modified bool) string {
-	if version == "" {
-		version = "dev"
+// tag is the release this binary is, or "" for anything a release check
+// could not compare: an untagged or dirty checkout, a version stamped
+// without the v prefix.
+func (b buildInfo) tag() string {
+	if b.modified || !semver.IsValid(b.version) {
+		return ""
 	}
+	return b.version
+}
+
+func (b buildInfo) String() string {
+	commit := b.commit
 	if len(commit) > 12 {
 		commit = commit[:12]
 	}
-	if modified && commit != "" {
+	if b.modified && commit != "" {
 		commit += "-dirty"
 	}
-	build := strings.TrimSpace(commit + " " + date)
-	if build == "" {
-		build = "unknown build"
+	stamp := strings.TrimSpace(commit + " " + b.date)
+	switch {
+	case b.version == "" && stamp == "":
+		return "dev (unknown build)"
+	case b.version == "":
+		return "dev (" + stamp + ")"
+	case stamp == "":
+		return b.version
 	}
-	return version + " (" + build + ")"
+	return b.version + " (" + stamp + ")"
 }
 
 // otherSlatesOnPath lists the slate executables on PATH that are not the

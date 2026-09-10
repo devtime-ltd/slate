@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestVersionFrom(t *testing.T) {
+func TestBuildFrom(t *testing.T) {
 	settings := func(revision, at, modified string) []debug.BuildSetting {
 		return []debug.BuildSetting{
 			{Key: "vcs.revision", Value: revision},
@@ -44,11 +44,12 @@ func TestVersionFrom(t *testing.T) {
 		{"ldflags win over build info", "v9.0.0", "abc1234", "2026-09-10T12:00:00Z",
 			&debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}, Settings: settings(checkout, "2026-09-10T11:47:21Z", "true")},
 			"v9.0.0 (abc1234-dirty 2026-09-10T12:00:00Z)"},
-		{"ldflags without a checkout", "v9.0.0", "", "", &debug.BuildInfo{}, "v9.0.0 (unknown build)"},
+		{"ldflags without a checkout", "v9.0.0", "", "", &debug.BuildInfo{}, "v9.0.0"},
+		{"go install at a tag", "", "", "", &debug.BuildInfo{Main: debug.Module{Version: "v0.1.0"}}, "v0.1.0"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := versionFrom(tc.v, tc.c, tc.d, tc.info); got != tc.want {
+			if got := buildFrom(tc.v, tc.c, tc.d, tc.info).String(); got != tc.want {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})

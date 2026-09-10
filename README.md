@@ -36,6 +36,16 @@ Either install reports the commit it was built from and that commit's date, take
 go install -ldflags "-X github.com/devtime-ltd/slate/cmd.version=v1.2.3" .
 ```
 
+### Update notices
+
+A release build (`go install ...@latest`, `@v0.1.0`, or a clean checkout at a tag) asks GitHub for the latest release once a day, alongside whatever command you ran, and prints a notice on stderr after the command's output, set off by a blank line, when there is a newer one:
+
+```
+slate v0.2.0 is available (you have v0.1.0): go install github.com/devtime-ltd/slate@latest
+```
+
+The lookup adds at most a second to that one command a day and is silent on any failure; offline, the next try is an hour later. It never runs on `dev` builds (a commit and a tag don't compare), when stderr is not a terminal, inside an agent session (`SLATE_AGENT=1`), or with `SLATE_NO_UPDATE_CHECK=1` set. `slate doctor` is the explicit diagnostic: it always does a live lookup and reports the latest release, with only `SLATE_NO_UPDATE_CHECK` stopping it. `slate version` repeats what the last lookup found, under the same conditions as the notice. The state lives in `~/.local/share/slate/update-check.json`.
+
 ## Quick Start
 
 ```sh
