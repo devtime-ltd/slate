@@ -142,14 +142,20 @@ func cmdVersion(name string, args ...string) string {
 	if err != nil {
 		return ""
 	}
-	v := strings.TrimSpace(string(out))
-	// Extract version-like substring
-	for _, word := range strings.Fields(v) {
-		if len(word) > 0 && (word[0] >= '0' && word[0] <= '9' || word[0] == 'v') {
+	return versionWord(string(out))
+}
+
+// versionWord picks the first field that starts with a digit, or a v followed
+// by one, out of output like "Docker version 29.4.0, build 9d7ad9f".
+func versionWord(out string) string {
+	out = strings.TrimSpace(out)
+	for _, word := range strings.Fields(out) {
+		digits := strings.TrimPrefix(word, "v")
+		if len(digits) > 0 && digits[0] >= '0' && digits[0] <= '9' {
 			return strings.TrimRight(word, ",")
 		}
 	}
-	return v
+	return out
 }
 
 // lowNetworkHeadroom is how few creatable networks counts as worth warning
