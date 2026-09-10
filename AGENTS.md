@@ -67,8 +67,9 @@ User-defined tools in `slate.yml` are always exec tools. Scaffolds can mix both.
 
 `agent:` is the command `slate agent [name]` runs in the worktree: a single
 command or a `[first-run, thereafter]` pair (first-run picked on the
-workspace's first entry: no `.slate/agent-started` marker yet, plus either
-SLATE_FRESH=1 or a bare workspace). Two hooks fire it (or anything else):
+workspace's first entry: no `.slate/agent-started` marker yet, plus the
+first-run debt `slate new` records, or the legacy SLATE_FRESH=1/bare
+fallbacks). Two hooks fire it (or anything else):
 `new:` runs straight after `slate new`'s fast phase and its presence
 auto-backgrounds provisioning (the point: enter an agent session while
 containers come up); `up:` runs after provisioning finishes before dropping
@@ -117,11 +118,13 @@ session, because such a command can still exit 0 and so reads as a clean quit:
 `runHostCommandDetail` times the run and `hostRun.bailed()` compares it against
 `agentMinRuntime()` (3s; SLATE_AGENT_MIN_RUNTIME overrides, 0 disables). A
 bailed launch skips the agent-started marker, so the failure isn't baked into
-the next entry's variant choice; a failed first-run launch additionally writes
-`firstRunPendingMarker` (`.slate/agent-first-run-pending`), which `agentFresh`
-honours ahead of SLATE_FRESH/bareness, because those signals don't survive to
-the next invocation and the owed first-run entry would otherwise fall through
-to the thereafter variant. A bail of the thereafter variant retries the
+the next entry's variant choice; a failed first-run launch re-writes
+`firstRunPendingMarker` (`.slate/agent-first-run-pending`), the same debt
+`createWorkspace` records at creation and the first session that runs clears.
+`agentFresh` honours it ahead of SLATE_FRESH, which only the hooks carry, and
+bareness, which a provisioned workspace no longer has: a `slate agent` started
+from a tmux session or a later shell has neither, and the owed first-run entry
+would otherwise fall through to the thereafter variant. A bail of the thereafter variant retries the
 first-run one once (the stale `claude --continue` shape: it presumed a session
 the workspace hasn't got, and exits 0 or 1 depending on the claude build);
 signal deaths and 126/127 don't retry, the first being the launch stopped from

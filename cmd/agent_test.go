@@ -22,15 +22,20 @@ func TestAgentFresh(t *testing.T) {
 	cases := []struct {
 		name     string
 		marker   bool
+		pending  bool
 		bare     bool
 		freshEnv string
 		want     bool
 	}{
-		{"first entry via up hook", false, false, "1", true},
-		{"first entry in bare workspace", false, true, "", true},
-		{"existing pre-marker workspace", false, false, "", false},
-		{"marker beats SLATE_FRESH", true, false, "1", false},
-		{"marker beats bare", true, true, "", false},
+		{"first entry via up hook", false, false, false, "1", true},
+		{"first entry in bare workspace", false, false, true, "", true},
+		// how a tmux session or a later shell reaches `slate agent`: no
+		// SLATE_FRESH, no bareness, and a session still owed
+		{"first entry outside the hooks", false, true, false, "", true},
+		{"existing pre-marker workspace", false, false, false, "", false},
+		{"marker beats SLATE_FRESH", true, false, false, "1", false},
+		{"marker beats bare", true, false, true, "", false},
+		{"marker beats pending", true, true, false, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -40,6 +45,11 @@ func TestAgentFresh(t *testing.T) {
 			}
 			if tc.marker {
 				if err := os.WriteFile(agentStartedMarker(wsDir), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.pending {
+				if err := os.WriteFile(firstRunPendingMarker(wsDir), nil, 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -135,9 +145,10 @@ func TestAgentUnconfiguredError(t *testing.T) {
 	}
 }
 
-// runAgentIn runs the agent in a throwaway workspace and reports the error
-// alongside whether the entry was recorded.
-func runAgentIn(t *testing.T, agent config.AgentCmd, fresh bool) (string, error, bool) {
+// runAgentIn runs the agent in a throwaway workspace carrying the given
+// .slate markers and reports the error alongside whether the entry was
+// recorded.
+func runAgentIn(t *testing.T, agent config.AgentCmd, fresh bool, markers ...string) (string, error, bool) {
 	t.Helper()
 	// so a failing runAgent can never hold the test hostage with a shell,
 	// however the suite is invoked
@@ -146,6 +157,11 @@ func runAgentIn(t *testing.T, agent config.AgentCmd, fresh bool) (string, error,
 	wsDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(wsDir, ".slate"), 0o755); err != nil {
 		t.Fatal(err)
+	}
+	for _, marker := range markers {
+		if err := writeWorkspaceMarker(wsDir, marker, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cfg := config.ProjectConfig{Project: "proj", Agent: agent}
 	err := runAgent(cfg, "ws", wsDir, fresh, nil)
@@ -228,7 +244,7 @@ func TestRunAgentPersistsPendingFirstRun(t *testing.T) {
 	}
 
 	// A session that runs settles the debt.
-	wsDir, _, _ = runAgentIn(t, config.AgentCmd{First: "sleep 0.5", Again: "true"}, true)
+	wsDir, _, _ = runAgentIn(t, config.AgentCmd{First: "sleep 0.5", Again: "true"}, true, firstRunPending)
 	if _, err := os.Stat(firstRunPendingMarker(wsDir)); err == nil {
 		t.Error("a session that ran should clear the pending first-run marker")
 	}

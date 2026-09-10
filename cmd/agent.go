@@ -25,9 +25,10 @@ var agentCmd = &cobra.Command{
 	Short: "Run the project's agent command in a workspace",
 	Long: `Runs the "agent:" command from the main checkout's slate.yml in the
 workspace directory. Configure a single command, or a [first-run, thereafter]
-pair; the first-run variant is picked on the workspace's first agent entry
-(tracked via .slate/agent-started), whether that entry comes through the up
-hook (SLATE_FRESH=1) or directly in a bare workspace.
+pair; the first-run variant is picked on the workspace's first agent entry,
+whichever way that entry is reached: slate new records the debt in
+.slate/agent-first-run-pending, and the first session that runs settles it
+(.slate/agent-started).
 
 A command that returns before it could have hosted a session is treated as a
 failed launch rather than a clean exit: slate reports it, leaves a shell in
@@ -80,19 +81,24 @@ func agentStartedMarker(wsDir string) string {
 	return filepath.Join(wsDir, ".slate", "agent-started")
 }
 
+// firstRunPending names the marker for a first-run agent entry the workspace
+// still owes.
+const firstRunPending = "agent-first-run-pending"
+
 func firstRunPendingMarker(wsDir string) string {
-	return filepath.Join(wsDir, ".slate", "agent-first-run-pending")
+	return filepath.Join(wsDir, ".slate", firstRunPending)
 }
 
 // agentFresh decides whether this is the workspace's first agent entry.
 // The agent-started marker is the source of truth once it exists: it stops
 // a bare workspace's later `slate up` (which sets SLATE_FRESH=1) from
-// re-running the first-run variant over a live session. A recorded failed
-// first-run launch keeps the workspace fresh for its next entry: SLATE_FRESH
-// and bareness are gone by then, and without the marker the entry would fall
-// through to the thereafter variant with the first-run command still owed.
-// Otherwise, SLATE_FRESH=1 (up hook) or a bare workspace means first entry;
-// existing pre-marker workspaces fall through to the thereafter variant.
+// re-running the first-run variant over a live session. Otherwise the debt
+// marker answers it, written by `slate new` and by a failed first-run launch,
+// cleared by the first session that runs: the entry point never has to carry
+// the signal, so a `slate agent` reached outside the hooks (a tmux session, a
+// later shell) still gets the first-run variant it is owed. SLATE_FRESH=1 and
+// bareness remain as fallbacks for workspaces created before the marker;
+// without any of them the entry falls through to the thereafter variant.
 func agentFresh(wsDir string) bool {
 	if _, err := os.Stat(agentStartedMarker(wsDir)); err == nil {
 		return false
@@ -156,16 +162,16 @@ func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool, extra 
 		}
 	}
 	if err != nil {
-		// The freshness signals (SLATE_FRESH, bareness) won't survive to the
-		// next invocation, so a failed first-run launch is persisted or the
-		// retry would land on the thereafter variant.
+		// Fresh without the marker is reachable two ways (a pre-marker
+		// workspace's SLATE_FRESH/bareness, and the thereafter retry), so a
+		// failed first-run launch records the debt rather than assuming it.
 		if finalFresh {
 			warnOnMarkerError("the workspace will not remember it is owed a first-run entry",
-				writeWorkspaceMarker(wsDir, "agent-first-run-pending", nil))
+				writeWorkspaceMarker(wsDir, firstRunPending, nil))
 		}
 		return holdWorkspaceOpen(wsDir, err)
 	}
-	_ = removeWorkspaceMarker(wsDir, "agent-first-run-pending")
+	_ = removeWorkspaceMarker(wsDir, firstRunPending)
 	warnOnMarkerError("the next entry will re-run the first-run variant over this workspace",
 		writeWorkspaceMarker(wsDir, "agent-started", nil))
 	// A session that outlived the launch floor but ended with a plain

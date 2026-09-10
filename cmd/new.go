@@ -182,6 +182,9 @@ func createWorkspace(name, branch, base string, bg, cd, adopt, bare bool) error 
 	if err := scaffold.GenerateEnvContainer(wsDir, mainRoot, hostname, projectName, name, cfg, proxyConfig); err != nil {
 		return fmt.Errorf("generating .env.container: %w", err)
 	}
+	warnOnMarkerError("an agent entry made outside the new:/up: hooks will get the thereafter variant",
+		writeWorkspaceMarker(wsDir, firstRunPending, nil))
+
 	added, err := scaffold.EnsureGitignore(mainRoot)
 	if err != nil {
 		fmt.Printf("  warning: could not update .gitignore: %v\n", err)
