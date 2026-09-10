@@ -160,6 +160,22 @@ func appLikeFromConfigJSON(data []byte) ([]string, error) {
 	return names, nil
 }
 
+// LiveServices lists the services that are running or restarting.
+func LiveServices(env Env) ([]string, error) {
+	cmd := buildCmd(env, false, "ps", "--services", "--status=running", "--status=restarting")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			return nil, fmt.Errorf("listing live services: %s", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return nil, fmt.Errorf("listing live services: %w", err)
+	}
+	return strings.Fields(string(out)), nil
+}
+
 func Port(env Env, service string, containerPort int) (string, error) {
 	cmd := buildCmd(env, false, "port", service, fmt.Sprintf("%d", containerPort))
 	cmd.Stdout = nil

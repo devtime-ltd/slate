@@ -1,10 +1,18 @@
 package cmd
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
+
+	"github.com/devtime-ltd/slate/internal/compose"
+	"github.com/devtime-ltd/slate/internal/config"
 )
 
 func TestWorkspaceConfigNote(t *testing.T) {
@@ -63,5 +71,84 @@ func TestProvisioningLockCleanupTombstone(t *testing.T) {
 	}
 	if strings.TrimSpace(string(data)) != "0" {
 		t.Errorf("want pid-0 tombstone, got %q", data)
+	}
+}
+
+func TestWorkerServices(t *testing.T) {
+	laravel := config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "laravel"}}
+	if got := workerServices(compose.Env{}, laravel); len(got) != 1 || got[0] != "queue" {
+		t.Errorf("laravel workers = %v, want [queue]", got)
+	}
+	nextjs := config.ProjectConfig{Scaffold: config.ScaffoldRef{Name: "nextjs"}}
+	if got := workerServices(compose.Env{}, nextjs); got != nil {
+		t.Errorf("nextjs workers = %v, want none", got)
+	}
+}
+
+func TestLiveWorkers(t *testing.T) {
+	workers := []string{"queue", "scheduler"}
+	cases := []struct {
+		name string
+		live []string
+		want []string
+	}{
+		{"all running", []string{"app", "queue", "scheduler", "postgres"}, []string{"queue", "scheduler"}},
+		{"one stopped by hand stays stopped", []string{"app", "scheduler"}, []string{"scheduler"}},
+		{"stack down", nil, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := liveWorkers(workers, tc.live); !slices.Equal(got, tc.want) {
+				t.Errorf("liveWorkers(%v, %v) = %v, want %v", workers, tc.live, got, tc.want)
+			}
+		})
+	}
+}
+
+// The refusal comes before any compose call, so no docker is needed here.
+func TestPauseWorkersRefusesTheTargetWorker(t *testing.T) {
+	mainRoot := newTestProject(t)
+	_, err := pauseWorkers(compose.Env{}, mainRoot, "queue")
+	if err == nil || !strings.Contains(err.Error(), "queue") {
+		t.Fatalf("pausing workers for a command in the queue should be refused, got %v", err)
+	}
+}
+
+// Run in a child process: the assertion is that SIGINT kills it, which the
+// hold from a real pause would prevent.
+func TestPauseWorkersWithoutWorkersLeavesSIGINTAlone(t *testing.T) {
+	if os.Getenv("SLATE_TEST_CHILD") == "1" {
+		mainRoot := newTestProject(t)
+		commitSlateYml(t, mainRoot, generateSlateYml("nextjs"))
+		restore, err := pauseWorkers(compose.Env{}, mainRoot, "app")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer restore()
+		if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+		return
+	}
+	child := exec.Command(os.Args[0], "-test.run=^TestPauseWorkersWithoutWorkersLeavesSIGINTAlone$")
+	child.Env = append(os.Environ(), "SLATE_TEST_CHILD=1")
+	out, err := child.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || !exitErr.Sys().(syscall.WaitStatus).Signaled() {
+		t.Fatalf("a pause with nothing to stop should leave SIGINT alone, child exited with %v\n%s", err, out)
+	}
+}
+
+// the scaffold is read from the committed slate.yml, not the working copy
+func commitSlateYml(t *testing.T, root, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, "slate.yml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", "scaffold"}} {
+		if out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
 	}
 }
