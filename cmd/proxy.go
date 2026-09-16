@@ -65,6 +65,16 @@ func init() {
 	rootCmd.AddCommand(proxyCmd)
 }
 
+// portConflictArgs builds the lsof query that decides whether something is
+// already serving a port slate wants. The selection has to be TCP-scoped:
+// `-i :443` matches UDP as well, and `-sTCP:LISTEN` filters state for TCP
+// only, so UDP rows pass through unfiltered. Every outbound HTTP/3 (QUIC)
+// socket to a remote :443 would then read as a local listener, and any
+// browser or app using HTTP/3 would block `slate proxy start`.
+func portConflictArgs(port int) []string {
+	return []string{fmt.Sprintf("-iTCP:%d", port), "-P", "-n", "-sTCP:LISTEN"}
+}
+
 func runProxyStart(cmd *cobra.Command, args []string) error {
 	if isProxyRunning() {
 		fmt.Println("Proxy is already running.")
@@ -97,7 +107,7 @@ func runProxyStart(cmd *cobra.Command, args []string) error {
 		portsToCheck = append(portsToCheck, httpsPort)
 	}
 	for _, p := range portsToCheck {
-		if out, _ := exec.Command("lsof", "-i", fmt.Sprintf(":%d", p), "-P", "-n", "-sTCP:LISTEN").Output(); len(out) > 0 {
+		if out, _ := exec.Command("lsof", portConflictArgs(p)...).Output(); len(out) > 0 {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) > 1 {
 				parts := strings.Fields(lines[1])
