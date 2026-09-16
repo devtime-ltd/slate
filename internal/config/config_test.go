@@ -56,6 +56,76 @@ func TestLoadGlobalPartialYAML(t *testing.T) {
 	}
 }
 
+func TestLoadGlobalReportsAnUnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SLATE_CONFIG_DIR", dir)
+	if err := os.Mkdir(filepath.Join(dir, "config.yml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadGlobal(); err == nil {
+		t.Fatal("a config.yml that is a directory should be an error, not the defaults")
+	}
+}
+
+func TestLoadRegistryReportsAnUnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SLATE_CONFIG_DIR", dir)
+	if _, err := LoadRegistry(); err != nil {
+		t.Fatalf("a missing registry should be empty, got %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "projects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRegistry(); err == nil {
+		t.Fatal("a registry that is a directory should be an error, not empty")
+	}
+	if got := ProjectsByName(); len(got) != 0 {
+		t.Errorf("ProjectsByName = %v, want empty", got)
+	}
+}
+
+func TestLoadRegistryRejectsAMalformedEntry(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SLATE_CONFIG_DIR", dir)
+	for _, content := range []string{"foo=\n", "=/tmp/x\n"} {
+		if err := os.WriteFile(filepath.Join(dir, "projects"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadRegistry(); err == nil || !strings.Contains(err.Error(), "malformed") {
+			t.Errorf("%q: err = %v, want a malformed-entry error", content, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "projects"), []byte("foo=\nok=/tmp/ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := ProjectsByName(); got["ok"] != "/tmp/ok" || len(got) != 1 {
+		t.Errorf("tolerant wrapper after a malformed line: got %v, want only ok", got)
+	}
+	if got, err := LoadRegistry(); err == nil || got["ok"] != "/tmp/ok" {
+		t.Errorf("strict loader after a malformed line: got %v, %v, want the error and the valid entries", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "projects"), []byte("ok=/tmp/ok\n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := LoadRegistry(); err != nil || got["ok"] != "/tmp/ok" {
+		t.Errorf("valid registry: got %v, %v", got, err)
+	}
+}
+
+func TestLoadGlobalDevRoot(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SLATE_CONFIG_DIR", dir)
+	os.WriteFile(filepath.Join(dir, "config.yml"), []byte("dev_root: ~/Code\n"), 0o644)
+
+	cfg, err := LoadGlobal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DevRoot != "~/Code" {
+		t.Errorf("DevRoot = %q, want ~/Code", cfg.DevRoot)
+	}
+}
+
 func TestLoadGlobalTLSFalse(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SLATE_CONFIG_DIR", dir)

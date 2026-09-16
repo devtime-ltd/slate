@@ -24,7 +24,8 @@ type GlobalConfig struct {
 	// AutoCd controls whether `slate new` and `slate up` drop into a shell
 	// at the workspace dir after provisioning. Override per-invocation with
 	// --cd or --cd=false.
-	AutoCd bool `yaml:"auto_cd"`
+	AutoCd  bool   `yaml:"auto_cd"`
+	DevRoot string `yaml:"dev_root"`
 }
 
 // Tool is implemented by ExecTool and DBTool. The marker method keeps the
@@ -309,8 +310,11 @@ func LoadGlobal() (GlobalConfig, error) {
 	cfg := DefaultGlobal()
 	path := filepath.Join(GlobalConfigDir(), "config.yml")
 	data, err := os.ReadFile(path)
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		return cfg, nil
+	}
+	if err != nil {
+		return cfg, err
 	}
 	// Use a separate struct for unmarshalling so we can detect which fields
 	// were explicitly set vs left at zero value.
@@ -321,6 +325,7 @@ func LoadGlobal() (GlobalConfig, error) {
 		SecretKey *string `yaml:"secret_key"`
 		Editor    *string `yaml:"editor"`
 		AutoCd    *bool   `yaml:"auto_cd"`
+		DevRoot   *string `yaml:"dev_root"`
 	}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return cfg, err
@@ -342,6 +347,9 @@ func LoadGlobal() (GlobalConfig, error) {
 	}
 	if raw.AutoCd != nil {
 		cfg.AutoCd = *raw.AutoCd
+	}
+	if raw.DevRoot != nil {
+		cfg.DevRoot = *raw.DevRoot
 	}
 	return cfg, nil
 }

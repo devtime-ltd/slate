@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,12 +51,33 @@ func ListProjects() []string {
 // ProjectsByName returns a name -> path map, with names fixed at registration
 // time so removals don't shift other names.
 func ProjectsByName() map[string]string {
-	out := map[string]string{}
 	data, err := os.ReadFile(RegistryPath())
 	if err != nil {
-		return out
+		return map[string]string{}
 	}
+	out, _ := parseRegistry(data)
+	return out
+}
 
+// LoadRegistry is ProjectsByName for callers that must not mistake an
+// unreadable or malformed registry for an empty or smaller one.
+func LoadRegistry() (map[string]string, error) {
+	data, err := os.ReadFile(RegistryPath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return map[string]string{}, err
+	}
+	out, malformed := parseRegistry(data)
+	if malformed != "" {
+		return out, fmt.Errorf("%s: malformed entry %q, want name=path", RegistryPath(), malformed)
+	}
+	return out, nil
+}
+
+func parseRegistry(data []byte) (out map[string]string, malformed string) {
+	out = map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -70,11 +93,15 @@ func ProjectsByName() map[string]string {
 		parts := strings.SplitN(line, "=", 2)
 		name := strings.TrimSpace(parts[0])
 		path := strings.TrimSpace(parts[1])
-		if name != "" && path != "" {
-			out[name] = path
+		if name == "" || path == "" {
+			if malformed == "" {
+				malformed = line
+			}
+			continue
 		}
+		out[name] = path
 	}
-	return out
+	return out, malformed
 }
 
 func uniqueNameFor(base string) string {

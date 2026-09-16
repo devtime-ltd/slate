@@ -82,6 +82,7 @@ Tools:
   slate path [name]               Print workspace path (pipeable, --open)
   slate pwd                       Print the project's main checkout (pipeable)
   slate cd [name]                 Spawn a sub-shell rooted at the workspace dir
+  slate where [project[@ws]]      Print a project or workspace directory (pipeable)
   slate code [name]               Open workspace in your editor
   slate shell [name]              Bash shell in app container
   slate agent [name]              Run the agent command in a workspace (see Agent)
@@ -103,6 +104,22 @@ Omit the workspace name on any command that takes one: if you're inside a worksp
 To target a workspace explicitly (from outside any worktree, or in non-interactive contexts like scripts, CI, and agents), set `SLATE_WORKSPACE=<name>` (honoured by every command, including the scaffold tools) or pass `-w/--workspace <name>` to the lifecycle/utility commands. Examples: `SLATE_WORKSPACE=api slate artisan migrate`, `slate -w api logs`. The scaffold tools (`artisan`, `composer`, `npm`, …) pass **every** argument straight through to the tool, including the tool's own `-w` (e.g. npm workspaces), so target those with `SLATE_WORKSPACE`, not `-w`.
 
 Add `--project <name>` to any command to target a project other than the current directory's. The project name comes from the registry (`slate ls --all`).
+
+### Jumping between projects: `slate where`
+
+`slate where [project[@workspace]]` prints a directory: a project's main checkout, a workspace inside it, or the dev root when given nothing. A project is looked up in the registry first, then under the dev root as `<org>/<repo>`, `<org>`, or a bare `<repo>` searched across every org; a name that turns up in more than one org is listed rather than guessed at. The dev root is `~/Development` unless `dev_root` is set in the global config or `SLATE_DEV_ROOT` in the environment, and it is what lets `slate where` reach projects that have never been `slate init`ed. The argument is the only selector: `--project` and `-w` are refused, and `SLATE_WORKSPACE` is ignored, so a bare `slate where` inside an agent session still means the dev root.
+
+A process cannot change its parent shell's directory, so wire it to a function in `~/.zshrc` or `~/.bashrc`:
+
+```sh
+dev() {
+  local dir
+  dir=$(slate where "$@") || return
+  cd "$dir"
+}
+```
+
+`dev` then lands on the dev root, `dev sparta` on the project, and `dev sparta@redis-cache` in the workspace. With slate's completion loaded (`source <(slate completion zsh)` or `source <(slate completion bash)`), `slate where <TAB>` completes project names, `<org>/<repo>` and `<project>@<workspace>`.
 
 ### Useful flags
 
@@ -415,6 +432,9 @@ editor: code            # default editor for `slate code` (prompted on first use
 auto_cd: true           # default: true. When true, `slate new` and `slate up`
                         # drop into a shell at the workspace dir when ready.
                         # Override per-invocation with --cd / --cd=false.
+dev_root: ~/Development # default: ~/Development. Where `slate where` looks for
+                        # projects not in the registry, laid out as <org>/<repo>.
+                        # SLATE_DEV_ROOT in the environment overrides it.
 ```
 
 The registered projects index lives at `~/.config/slate/projects` (one `name=path` entry per line, names assigned at registration and stable across removals).
