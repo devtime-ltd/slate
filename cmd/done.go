@@ -1,13 +1,17 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/devtime-ltd/slate/internal/workspace"
@@ -118,16 +122,79 @@ func resolvePath(p string) string {
 // otherwise (an unregistered dir - not a slate workspace) it falls back to the
 // work tree's own git.
 func gitFor(gitDir, workTree string, args ...string) (string, error) {
+	out, _, err := gitForRaw(gitDir, workTree, args...)
+	return strings.TrimSpace(string(out)), err
+}
+
+// gitForRaw is gitFor with stdout untouched, for -z listings where a path's
+// own whitespace is data, and stderr returned too, under LC_ALL=C so git's
+// warnings are parseable.
+func gitForRaw(gitDir, workTree string, args ...string) (stdout, stderr []byte, err error) {
 	if gitDir != "" {
 		args = append([]string{"--git-dir=" + gitDir, "--work-tree=" + workTree}, args...)
 	}
+	// a -c setting reaches git's own subprocesses too: a submodule's config
+	// is container-writable and core.fsmonitor names a command
+	args = append([]string{"-c", "core.fsmonitor=false"}, args...)
 	c := exec.Command("git", args...)
-	if gitDir == "" {
-		c.Dir = workTree
+	c.Env = append(os.Environ(), "LC_ALL=C")
+	// ls-files --others lists only the subtree under git's own cwd, and
+	// relative to it, so slate's cwd (a subdirectory, say) must not leak in
+	c.Dir = workTree
+	errBuf := &cappedBuffer{limit: gitOutputLimit}
+	c.Stderr = errBuf
+	pipe, err := c.StdoutPipe()
+	if err != nil {
+		return nil, nil, err
 	}
-	out, err := c.Output()
-	return strings.TrimSpace(string(out)), err
+	if err := c.Start(); err != nil {
+		return nil, nil, err
+	}
+	// a container can make a listing, or the warnings beside it, arbitrarily
+	// long; past the cap the answer is "too much to judge", never a partial
+	// listing
+	stdout, readErr := io.ReadAll(io.LimitReader(pipe, gitOutputLimit+1))
+	if int64(len(stdout)) > gitOutputLimit || errBuf.overflowed.Load() {
+		c.Process.Kill()
+		c.Wait()
+		return nil, nil, errGitOutputTooLarge
+	}
+	err = c.Wait()
+	if errBuf.overflowed.Load() {
+		return nil, nil, errGitOutputTooLarge
+	}
+	if readErr != nil {
+		err = readErr
+	}
+	return stdout, errBuf.Bytes(), err
 }
+
+var (
+	gitOutputLimit       int64 = 16 << 20
+	errGitOutputTooLarge       = errors.New("git output too large to judge")
+)
+
+// cappedBuffer keeps at most limit bytes and remembers that more arrived. It
+// wraps rather than embeds bytes.Buffer: an embedded ReadFrom would let
+// io.Copy bypass Write.
+type cappedBuffer struct {
+	buf        bytes.Buffer
+	limit      int64
+	overflowed atomic.Bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - int64(b.buf.Len()); int64(len(p)) > room {
+		b.overflowed.Store(true)
+		if room > 0 {
+			b.buf.Write(p[:room])
+		}
+		return len(p), nil
+	}
+	return b.buf.Write(p)
+}
+
+func (b *cappedBuffer) Bytes() []byte { return b.buf.Bytes() }
 
 func isAncestorIn(dir, commit, ref string) bool {
 	c := exec.Command("git", "merge-base", "--is-ancestor", commit, ref)

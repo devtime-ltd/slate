@@ -2,12 +2,19 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,9 +23,14 @@ import (
 	"github.com/devtime-ltd/slate/internal/safeio"
 	"github.com/devtime-ltd/slate/internal/workspace"
 	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
 )
 
-var agentNoHold bool
+var (
+	agentNoHold     bool
+	agentContinue   bool
+	agentForceFresh bool
+)
 
 var agentCmd = &cobra.Command{
 	Use:   "agent [workspace]",
@@ -38,6 +50,12 @@ Arguments after -- are passed through to the agent command (appended to
 whichever variant runs), e.g.: slate agent myws -- "review the open PR".
 Put {{ARGS}} in the agent: command to control where they land; required
 for anything beyond a plain simple command (pipes, redirects, comments).
+
+A workspace still owing its first-run entry but carrying commits or
+uncommitted changes made since it was created gets the thereafter variant
+first, falling back to first-run if that bails: an agent session slate did
+not launch leaves no marker. --continue and --fresh name the variant
+outright and never retry the other.
 
 Placeholders expanded: {{WORKSPACE}}, {{PROJECT}}, {{HOSTNAME}}.`,
 	GroupID: "tools",
@@ -73,7 +91,15 @@ Placeholders expanded: {{WORKSPACE}}, {{PROJECT}}, {{HOSTNAME}}.`,
 		if cfg.Agent.IsZero() {
 			return holdWorkspaceOpen(wsDir, agentUnconfiguredError(mainRoot, wsDir))
 		}
-		return runAgent(cfg, name, wsDir, agentFresh(wsDir), extra)
+		fresh, forced := false, true
+		switch {
+		case agentContinue:
+		case agentForceFresh:
+			fresh = true
+		default:
+			fresh, forced = agentFresh(mainRoot, wsDir), false
+		}
+		return runAgent(cfg, name, wsDir, fresh, forced, extra)
 	},
 }
 
@@ -96,25 +122,602 @@ func firstRunPendingMarker(wsDir string) string {
 // marker answers it, written by `slate new` and by a failed first-run launch,
 // cleared by the first session that runs: the entry point never has to carry
 // the signal, so a `slate agent` reached outside the hooks (a tmux session, a
-// later shell) still gets the first-run variant it is owed. SLATE_FRESH=1 and
-// bareness remain as fallbacks for workspaces created before the marker;
-// without any of them the entry falls through to the thereafter variant.
-func agentFresh(wsDir string) bool {
-	if _, err := os.Stat(agentStartedMarker(wsDir)); err == nil {
+// later shell) still gets the first-run variant it is owed, unless the
+// worktree has been worked since (agentWorked). SLATE_FRESH=1 and bareness
+// remain as fallbacks for workspaces created before the marker; without any
+// of them the entry falls through to the thereafter variant.
+func agentFresh(mainRoot, wsDir string) bool {
+	// presence is judged through the pinned dir: a symlink planted at a
+	// marker's name is not the marker
+	dir, err := safeio.OpenDir(filepath.Join(wsDir, ".slate"))
+	switch {
+	case err == nil:
+		defer dir.Close()
+		for _, marker := range []string{"agent-started", firstRunPending, "unprovisioned"} {
+			// something planted at a marker's name could hide a session
+			if safeio.ExistsAt(dir, marker) && !safeio.RegularFileAt(dir, marker) {
+				return false
+			}
+		}
+		if safeio.RegularFileAt(dir, "agent-started") {
+			return false
+		}
+		if safeio.RegularFileAt(dir, firstRunPending) {
+			// the creation hook's own entry: provisioning may already have
+			// written files alongside it, and nothing else has had the chance
+			if os.Getenv("SLATE_FRESH") == "1" && readFirstRunDebt(wsDir).Provisioning {
+				return true
+			}
+			return !agentWorked(mainRoot, wsDir)
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		// something planted where .slate should be could hide a session
 		return false
 	}
-	if _, err := os.Stat(firstRunPendingMarker(wsDir)); err == nil {
-		return true
-	}
 	if os.Getenv("SLATE_FRESH") == "1" {
+		return !agentWorked(mainRoot, wsDir)
+	}
+	return err == nil && safeio.RegularFileAt(dir, "unprovisioned")
+}
+
+// firstRunDebt is the pending marker's content: the worktree as it stood when
+// the debt was recorded, so only work done since reads as a session.
+type firstRunDebt struct {
+	Head         string `json:"head,omitempty"`
+	Tree         string `json:"tree,omitempty"`
+	Reflog       int    `json:"reflog,omitempty"`
+	Provisioning bool   `json:"provisioning,omitempty"`
+	// Corrupt marks a marker that exists but could not be read as a debt: a
+	// container-mangled one must not pass for the legacy empty marker.
+	Corrupt bool `json:"-"`
+}
+
+// recordFirstRunDebt writes the marker with the worktree's current baseline;
+// provisioning marks a workspace whose first lifecycle has yet to land, so a
+// later refresh may fold that lifecycle's files in whatever the tree shows.
+func recordFirstRunDebt(mainRoot, wsDir string, provisioning bool) error {
+	debt := firstRunDebt{Provisioning: provisioning}
+	// an unregistered worktree has only its container-writable .git to read
+	// through, so it gets no baseline and agentWorked fails closed on it
+	if gitDir, ok := registeredGitDir(mainRoot, wsDir); ok {
+		if head, err := gitFor(gitDir, wsDir, "rev-parse", "HEAD"); err == nil {
+			if tree, err := worktreeFingerprint(gitDir, wsDir); err == nil {
+				if reflog, err := reflogEntries(gitDir, wsDir); err == nil {
+					debt = firstRunDebt{Head: head, Tree: tree, Reflog: reflog, Provisioning: provisioning}
+				}
+			}
+		}
+	}
+	data, err := json.Marshal(debt)
+	if err != nil {
+		return err
+	}
+	return replaceWorkspaceMarker(wsDir, firstRunPending, data)
+}
+
+// provisioningBaselineRefresh decides, before a lifecycle runs, whether its
+// files may be folded into the baseline afterwards: while the debt is
+// outstanding and either its first provisioning has yet to land or nothing has
+// worked the tree yet, so out-of-band work already present keeps its evidence.
+// Not while a new: hook's session runs alongside the lifecycle.
+func provisioningBaselineRefresh(mainRoot, wsDir string) func() {
+	if !debtOutstanding(wsDir) {
+		return func() {}
+	}
+	if debt := readFirstRunDebt(wsDir); !debt.Provisioning {
+		if agentWorked(mainRoot, wsDir) {
+			return func() {}
+		}
+		// the window opens now, so a lifecycle that fails part way leaves a
+		// retry free to fold its files in
+		debt.Provisioning = true
+		if data, err := json.Marshal(debt); err == nil {
+			warnOnMarkerError("a later refresh may fold unrelated changes into the baseline",
+				replaceWorkspaceMarker(wsDir, firstRunPending, data))
+		}
+	}
+	return func() {
+		if debtOutstanding(wsDir) {
+			warnOnMarkerError("provisioning's changes may read as an agent session's work",
+				recordFirstRunDebt(mainRoot, wsDir, false))
+		}
+	}
+}
+
+// noteHookOutcome records, for a background provisioner still running, that
+// the new: hook returned inside the launch floor and so hosted no session: the
+// provisioner may then fold its lifecycle's files into the baseline.
+func noteHookOutcome(mainRoot, wsDir string, run hostRun) {
+	if !run.bailed() {
+		return
+	}
+	// the marker goes down before the lock is read: a provisioner that has
+	// already finished cannot consume it, so this side refreshes instead
+	warnOnMarkerError("provisioning's changes may read as an agent session's work",
+		writeWorkspaceMarker(wsDir, hookHostedNoSession, nil))
+	if _, alive := readProvisioningLock(wsDir); !alive && hookBailed(wsDir) && debtOutstanding(wsDir) {
+		warnOnMarkerError("provisioning's changes may read as an agent session's work",
+			recordFirstRunDebt(mainRoot, wsDir, false))
+	}
+}
+
+const hookHostedNoSession = "agent-hook-bailed"
+
+// provisionRefreshWanted is the background provisioner's decision at the end
+// of its lifecycle: refresh when launched with no hook alongside, or when the
+// hook has since reported it hosted no session.
+func provisionRefreshWanted(opts provisionOpts, wsDir string) bool {
+	// consumed whatever the launch: a licence left by an earlier provisioning
+	// that failed before its second look must not reach this one's
+	bailed := hookBailed(wsDir)
+	return opts.refreshDebt || bailed
+}
+
+// provisionSecondLook runs once the lifecycle's lock has gone, for a hook
+// that bailed after the in-lock decision. Nothing else refreshes here: an
+// agent may already be at work.
+func provisionSecondLook(wsDir string, refresh func()) {
+	if hookBailed(wsDir) {
+		refresh()
+	}
+}
+
+// hookBailed consumes the licence a new: hook leaves on returning inside the
+// launch floor.
+func hookBailed(wsDir string) bool {
+	dir, err := safeio.OpenDir(filepath.Join(wsDir, ".slate"))
+	if err != nil {
+		return false
+	}
+	defer dir.Close()
+	if !safeio.RegularFileAt(dir, hookHostedNoSession) {
+		return false
+	}
+	_ = safeio.RemoveAt(dir, hookHostedNoSession)
+	return true
+}
+
+// markProvisioned ends the provisioning window a debt records, keeping its
+// baseline.
+func markProvisioned(wsDir string) {
+	debt := readFirstRunDebt(wsDir)
+	if !debt.Provisioning || !debtOutstanding(wsDir) {
+		return
+	}
+	debt.Provisioning = false
+	if data, err := json.Marshal(debt); err == nil {
+		warnOnMarkerError("a later provisioning may fold unrelated changes into the baseline",
+			replaceWorkspaceMarker(wsDir, firstRunPending, data))
+	}
+}
+
+func debtOutstanding(wsDir string) bool {
+	dir, err := safeio.OpenDir(filepath.Join(wsDir, ".slate"))
+	if err != nil {
+		return false
+	}
+	defer dir.Close()
+	return safeio.RegularFileAt(dir, firstRunPending)
+}
+
+func readFirstRunDebt(wsDir string) firstRunDebt {
+	var debt firstRunDebt
+	dir, err := safeio.OpenDir(filepath.Join(wsDir, ".slate"))
+	if err != nil {
+		return debt
+	}
+	defer dir.Close()
+	if !safeio.RegularFileAt(dir, firstRunPending) {
+		return debt
+	}
+	data, err := safeio.ReadFileAt(dir, firstRunPending, 1<<16)
+	if err != nil {
+		debt.Corrupt = true
+		return debt
+	}
+	if body := bytes.TrimSpace(data); len(body) > 0 && (body[0] != '{' || json.Unmarshal(body, &debt) != nil) {
+		// a recorded debt is a JSON object; "null" decodes cleanly to nothing
+		debt = firstRunDebt{Corrupt: true}
+	}
+	return debt
+}
+
+// agentWorked reads git through the main checkout's registration of the
+// worktree, never the worktree's own container-writable .git pointer, so an
+// unregistered worktree is not judged at all. A marker without a baseline
+// (recorded before there was one) falls back to the worktree's reflog and a
+// dirty tree.
+func agentWorked(mainRoot, wsDir string) bool {
+	gitDir, ok := registeredGitDir(mainRoot, wsDir)
+	if !ok {
 		return true
 	}
-	_, err := os.Stat(unprovisionedMarker(wsDir))
-	return err == nil
+	head, err := gitFor(gitDir, wsDir, "rev-parse", "HEAD")
+	if err != nil {
+		// a tree that cannot be judged is not a tree to start over in
+		return true
+	}
+	debt := readFirstRunDebt(wsDir)
+	if debt.Corrupt {
+		return true
+	}
+	if debt.Head == "" {
+		out, warnings, err := gitForRaw(gitDir, wsDir, "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=dirty")
+		if err != nil || len(statusLines(string(out))) > 0 {
+			return true
+		}
+		if unopened, err := unopenedDirectories(warnings); err != nil || len(unopened) > 0 {
+			return true
+		}
+		moved, err := headMoved(gitDir, wsDir)
+		return err != nil || moved
+	}
+	if head != debt.Head {
+		return true
+	}
+	// a reflog that cannot be read, or has outgrown the cap, cannot clear
+	// the tree either; one pruned since the baseline reads as work too, and
+	// a baseline taken with no reflog at all (core.logAllRefUpdates off)
+	// could not tell a commit reset back from no movement
+	if debt.Reflog == 0 {
+		return true
+	}
+	if reflog, err := reflogEntries(gitDir, wsDir); err != nil || reflog != debt.Reflog {
+		return true
+	}
+	tree, err := worktreeFingerprint(gitDir, wsDir)
+	return err != nil || tree != debt.Tree
+}
+
+// reflogEntries counts the worktree's HEAD reflog, which a session's commit
+// grows even when a later reset puts HEAD back where the baseline found it.
+func reflogEntries(gitDir, wsDir string) (int, error) {
+	entries, err := headReflog(gitDir, wsDir)
+	return len(entries), err
+}
+
+// headReflog is the worktree's own HEAD reflog, oldest first, as the commits
+// each entry moved to. It is read from the registered git dir: git reflog
+// show falls through to the branch's log when the worktree has none, and a
+// branch's older history is not this worktree's movement.
+func headReflog(gitDir, wsDir string) ([]string, error) {
+	if gitDir == "" {
+		log, err := gitFor(gitDir, wsDir, "reflog", "show", "--format=%H", "HEAD")
+		if err != nil || log == "" {
+			return nil, err
+		}
+		entries := strings.Split(log, "\n")
+		slices.Reverse(entries)
+		return entries, nil
+	}
+	f, err := os.Open(filepath.Join(gitDir, "logs", "HEAD"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, gitOutputLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > gitOutputLimit {
+		return nil, errGitOutputTooLarge
+	}
+	var commits []string
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if fields := strings.Fields(line); len(fields) >= 2 {
+			commits = append(commits, fields[1])
+		}
+	}
+	return commits, nil
+}
+
+// worktreeFingerprint hashes the uncommitted changes: every tracked path that
+// differs from HEAD and every untracked path, each with its size, mtime and
+// first megabyte, so an edit to a path that was already dirty when the
+// baseline was taken still changes it and nothing container-sized is ever
+// buffered. An entry that cannot be read as a regular file (a symlink, a
+// FIFO, a file the host user may not open, a deleted file) contributes its
+// path, link target and size/mtime, never a target's contents, and a
+// directory git could not open contributes its path and mtime, which moves
+// when something is added beneath it.
+func worktreeFingerprint(gitDir, wsDir string) (string, error) {
+	// "dirty" sees a submodule's commits without git running a status inside
+	// it, where a container-writable config could name commands to run
+	changed, _, err := gitForRaw(gitDir, wsDir, "diff", "--name-only", "-z", "--ignore-submodules=dirty", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	// staging a path already listed as modified changes nothing in the tree,
+	// and restaging new content behind restored bytes changes only the blob
+	staged, _, err := gitForRaw(gitDir, wsDir, "diff", "--cached", "--raw", "-z", "--ignore-submodules=dirty", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	others, warnings, err := gitForRaw(gitDir, wsDir, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return "", err
+	}
+	dir, err := safeio.OpenDir(wsDir)
+	if err != nil {
+		return "", err
+	}
+	defer dir.Close()
+	h := sha256.New()
+	budget := fingerprintBudget
+	for _, rel := range strings.Split(string(changed), "\x00") {
+		if rel == "" {
+			continue
+		}
+		if err := hashEntry(h, gitDir, dir, wsDir, rel, &budget); err != nil {
+			return "", err
+		}
+	}
+	io.WriteString(h, "\x00\x00staged\x00")
+	h.Write(staged)
+	io.WriteString(h, "\x00\x00")
+	for _, rel := range strings.Split(string(others), "\x00") {
+		if rel == "" || slateGenerated(rel) {
+			continue
+		}
+		// an untracked embedded repository is listed as "name/", and is
+		// hashed by its own commit like a submodule
+		if err := hashEntry(h, gitDir, dir, wsDir, strings.TrimSuffix(rel, "/"), &budget); err != nil {
+			return "", err
+		}
+	}
+	unopened, err := unopenedDirectories(warnings)
+	if err != nil {
+		return "", err
+	}
+	for _, rel := range unopened {
+		fmt.Fprintf(h, "\x00%s\x00unopened", rel)
+		if st, err := safeio.StatAt(dir, rel); err == nil {
+			fmt.Fprintf(h, " %d", st.Mtim.Nano())
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// unopenedDirectories lists the directories git warned it could not open,
+// minus slate's own generated tree. A name holding a newline spreads its
+// warning over several lines, past the pattern, so every warning has to be
+// accounted for or the listing is not trusted.
+func unopenedDirectories(warnings []byte) ([]string, error) {
+	matches := unopenedDirectory.FindAllSubmatch(warnings, -1)
+	if bytes.Count(warnings, []byte("warning: could not open directory '")) != len(matches) {
+		return nil, errUnreadWarning
+	}
+	var dirs []string
+	for _, m := range matches {
+		rel := strings.TrimSuffix(string(m[1]), "/")
+		if !slateGenerated(rel + "/") {
+			dirs = append(dirs, rel)
+		}
+	}
+	return dirs, nil
+}
+
+var errUnreadWarning = errors.New("a warning git printed could not be read")
+
+// hashEntry folds one path into the fingerprint through the pinned dir only:
+// size, mode, mtime and the first megabyte of a readable regular file, the
+// target of a symlink, a submodule's own commit, the metadata of anything
+// else, or "missing". A submodule that cannot be read, or content past the
+// budget, is an error, so the tree is not judged at all.
+func hashEntry(h io.Writer, gitDir string, dir *os.File, wsDir, rel string, budget *int64) error {
+	fmt.Fprintf(h, "\x00%s\x00", rel)
+	if f, err := safeio.OpenFileAt(dir, rel); err == nil {
+		if info, err := f.Stat(); err == nil {
+			fmt.Fprintf(h, "%d %o %d ", info.Size(), info.Mode(), info.ModTime().UnixNano())
+		}
+		// a read that fails part way (the container truncating the file under
+		// us) must never look like the baseline
+		n, err := io.CopyN(h, f, fingerprintBytes)
+		if err != nil && err != io.EOF {
+			fmt.Fprintf(h, " read error %d", time.Now().UnixNano())
+		}
+		f.Close()
+		if *budget -= n; *budget < 0 {
+			return errFingerprintTooLarge
+		}
+		return nil
+	}
+	st, err := safeio.StatAt(dir, rel)
+	if err != nil {
+		io.WriteString(h, "missing")
+		return nil
+	}
+	switch st.Mode & unix.S_IFMT {
+	case unix.S_IFLNK:
+		if target, err := safeio.ReadlinkAt(dir, rel); err == nil {
+			io.WriteString(h, "-> "+target)
+		} else {
+			io.WriteString(h, "unreadable link")
+		}
+	case unix.S_IFDIR:
+		// a directory in git's listing is a submodule: its commit is the
+		// change, read from its own files without running git in it
+		head, err := submoduleHead(gitDir, dir, wsDir, rel)
+		if err != nil {
+			return fmt.Errorf("submodule %s: %w", rel, err)
+		}
+		fmt.Fprintf(h, "submodule %s", head)
+	default:
+		fmt.Fprintf(h, "unreadable %d %o %d", st.Size, st.Mode, st.Mtim.Nano())
+	}
+	return nil
+}
+
+// submoduleHead resolves a submodule's HEAD commit by reading its files: the
+// .git pointer under the pinned worktree, then HEAD and its ref (or
+// packed-refs) in the git dir it names, which may only lie where git keeps
+// submodules and is reached from there through pinned opens. No git runs
+// inside the submodule and no path under the worktree is re-walked.
+func submoduleHead(gitDir string, dir *os.File, wsDir, rel string) (string, error) {
+	var sub *os.File
+	if pointer, err := safeio.ReadFileAt(dir, rel+"/.git", 4096); err == nil {
+		target := strings.TrimSpace(strings.TrimPrefix(string(pointer), "gitdir:"))
+		if !strings.HasPrefix(string(pointer), "gitdir:") || target == "" {
+			return "", fmt.Errorf("unrecognised .git pointer")
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(wsDir, rel, target)
+		}
+		sub, err = submoduleGitDir(gitDir, dir, wsDir, filepath.Clean(target))
+		if err != nil {
+			return "", err
+		}
+	} else {
+		parent, leaf, done, err := descendDir(dir, rel+"/.git")
+		if err != nil {
+			return "", err
+		}
+		defer done()
+		sub, err = safeio.OpenDirAt(parent, leaf)
+		if err != nil {
+			return "", err
+		}
+	}
+	defer sub.Close()
+	head, err := safeio.ReadFileAt(sub, "HEAD", 4096)
+	if err != nil {
+		return "", err
+	}
+	ref := strings.TrimSpace(string(head))
+	if !strings.HasPrefix(ref, "ref: ") {
+		return ref, nil
+	}
+	ref = strings.TrimPrefix(ref, "ref: ")
+	if sha, err := safeio.ReadFileAt(sub, ref, 4096); err == nil {
+		return strings.TrimSpace(string(sha)), nil
+	}
+	packed, err := safeio.ReadFileAt(sub, "packed-refs", gitOutputLimit)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(packed), "\n") {
+		if fields := strings.Fields(line); len(fields) == 2 && fields[1] == ref {
+			return fields[0], nil
+		}
+	}
+	return "", fmt.Errorf("%s not found", ref)
+}
+
+// submoduleGitDir opens the git dir a submodule's .git pointer names, a clean
+// absolute path. git keeps a linked worktree's submodules under the
+// worktree's registered git dir and a main checkout's under its own .git; a
+// pointer anywhere else is refused, since the container writes it, and the
+// path below the root is descended with pinned opens so no symlink on the
+// way is followed.
+func submoduleGitDir(gitDir string, dir *os.File, wsDir, target string) (*os.File, error) {
+	if gitDir != "" {
+		if rel, ok := pathBelow(gitDir, target); ok {
+			root, err := safeio.OpenDir(gitDir)
+			if err != nil {
+				return nil, err
+			}
+			defer root.Close()
+			return openDirBelow(root, rel)
+		}
+	}
+	if rel, ok := pathBelow(filepath.Join(wsDir, ".git"), target); ok {
+		return openDirBelow(dir, ".git/"+rel)
+	}
+	return nil, fmt.Errorf("git dir %s lies outside the worktree's git dir", target)
+}
+
+// pathBelow is the slash-separated path of p strictly inside root, comparing
+// the paths as given and then with symlinks resolved.
+func pathBelow(root, p string) (string, bool) {
+	for _, pair := range [][2]string{{root, p}, {resolvePath(root), resolvePath(p)}} {
+		prefix := filepath.Clean(pair[0]) + string(filepath.Separator)
+		if strings.HasPrefix(pair[1], prefix) {
+			return filepath.ToSlash(pair[1][len(prefix):]), true
+		}
+	}
+	return "", false
+}
+
+func openDirBelow(root *os.File, rel string) (*os.File, error) {
+	parent, leaf, done, err := descendDir(root, rel)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return safeio.OpenDirAt(parent, leaf)
+}
+
+// descendDir pins the parent of rel's leaf under dir, like safeio's reads do.
+func descendDir(dir *os.File, rel string) (parent *os.File, leaf string, done func(), err error) {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	parent = dir
+	for _, name := range parts[:len(parts)-1] {
+		next, err := safeio.OpenDirAt(parent, name)
+		if parent != dir {
+			parent.Close()
+		}
+		if err != nil {
+			return nil, "", nil, err
+		}
+		parent = next
+	}
+	return parent, parts[len(parts)-1], func() {
+		if parent != dir {
+			parent.Close()
+		}
+	}, nil
+}
+
+// fingerprintBytes bounds how much of each file is hashed; the size and
+// mtime cover the rest.
+const fingerprintBytes = 1 << 20
+
+// fingerprintBudget bounds how much file content one fingerprint reads in
+// all, whatever the container has listed; a tree past it is not judged.
+var fingerprintBudget int64 = 1 << 30
+
+var errFingerprintTooLarge = errors.New("too much content to fingerprint")
+
+// unopenedDirectory matches git's LC_ALL=C warning for an untracked directory
+// it could not read, which it otherwise omits from the listing with exit 0.
+// The name is quoted but not escaped, so it runs to the last quote before the
+// reason, which carries no colon of its own.
+var unopenedDirectory = regexp.MustCompile(`(?m)^warning: could not open directory '(.+)': [^:\n]*$`)
+
+var errNoReflog = errors.New("no HEAD reflog to judge movement by")
+
+// headMoved reports whether the worktree's own HEAD reflog, which starts at
+// its checkout, ever pointed anywhere but the checkout commit; a reflog that
+// is missing or cannot be read is an error for the caller to fail closed on.
+func headMoved(gitDir, wsDir string) (bool, error) {
+	entries, err := headReflog(gitDir, wsDir)
+	if err != nil {
+		return false, err
+	}
+	if len(entries) == 0 {
+		return false, errNoReflog
+	}
+	head, err := gitFor(gitDir, wsDir, "rev-parse", "HEAD")
+	if err != nil {
+		return false, err
+	}
+	// a commit later reset away left an entry pointing elsewhere
+	for _, entry := range entries[1:] {
+		if entry != entries[0] {
+			return true, nil
+		}
+	}
+	return head != entries[0], nil
 }
 
 func init() {
 	agentCmd.Flags().BoolVar(&agentNoHold, "no-hold", false, "exit on a failed agent launch instead of leaving a shell in the workspace")
+	agentCmd.Flags().BoolVar(&agentContinue, "continue", false, "run the thereafter variant whatever the workspace records, with no first-run retry")
+	agentCmd.Flags().BoolVar(&agentForceFresh, "fresh", false, "run the first-run variant whatever the workspace records")
+	agentCmd.MarkFlagsMutuallyExclusive("continue", "fresh")
 	rootCmd.AddCommand(agentCmd)
 }
 
@@ -129,10 +732,11 @@ func agentUnconfiguredError(mainRoot, wsDir string) error {
 	return fmt.Errorf("no `agent:` in %s; set a command (e.g. `agent: claude`) or a [first-run, thereafter] pair", mainYml)
 }
 
-func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool, extra []string) error {
+func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh, forced bool, extra []string) error {
 	command, variant := cfg.Agent.Again, "thereafter"
 	if fresh {
 		command, variant = cfg.Agent.First, "first-run"
+		baselineFirstEntry(wsDir)
 	}
 
 	run, err := runHostCommandDetail(cfg, command, wsName, wsDir, fresh, extra, true)
@@ -149,11 +753,12 @@ func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool, extra 
 		// 126/127 never reach here (runHostCommandDetail returns them as
 		// errors): a command that couldn't run is a config problem to
 		// surface, and retrying the other variant would mask it.
-		if run.exitCode >= 0 && run.exitCode <= 128 && !fresh && cfg.Agent.First != "" && cfg.Agent.First != cfg.Agent.Again {
+		if !forced && run.exitCode >= 0 && run.exitCode <= 128 && !fresh && cfg.Agent.First != "" && cfg.Agent.First != cfg.Agent.Again {
 			fmt.Fprintf(os.Stderr, "  %s %v\n", warn(), err)
 			fmt.Fprintln(os.Stderr, "  retrying with the first-run variant")
 			finalFresh = true
 			variant = "first-run"
+			baselineFirstEntry(wsDir)
 			run, err = runHostCommandDetail(cfg, cfg.Agent.First, wsName, wsDir, true, extra, true)
 			recordAgentRun(wsDir, variant, run)
 			if err == nil && run.bailed() {
@@ -165,7 +770,10 @@ func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool, extra 
 		// Fresh without the marker is reachable two ways (a pre-marker
 		// workspace's SLATE_FRESH/bareness, and the thereafter retry), so a
 		// failed first-run launch records the debt rather than assuming it.
-		if finalFresh {
+		// the debt outlives the launch, but the baseline taken before it
+		// stays as it was: whatever the launcher wrote before bailing is
+		// evidence for the next entry, never a new baseline
+		if finalFresh && !debtOutstanding(wsDir) {
 			warnOnMarkerError("the workspace will not remember it is owed a first-run entry",
 				writeWorkspaceMarker(wsDir, firstRunPending, nil))
 		}
@@ -190,6 +798,17 @@ func runAgent(cfg config.ProjectConfig, wsName, wsDir string, fresh bool, extra 
 	return nil
 }
 
+// baselineFirstEntry gives a first entry with no baseline yet one now, before
+// its command can write anything, so a bailed launch's files are evidence.
+func baselineFirstEntry(wsDir string) {
+	if readFirstRunDebt(wsDir).Head != "" {
+		return
+	}
+	mainRoot, _ := workspace.MainRoot()
+	warnOnMarkerError("a bailed launch's files may read as the baseline",
+		recordFirstRunDebt(mainRoot, wsDir, false))
+}
+
 // warnOnMarkerError surfaces a failed state-bearing marker write: losing one
 // silently would misroute the workspace's next variant choice.
 func warnOnMarkerError(consequence string, err error) {
@@ -208,6 +827,17 @@ func writeWorkspaceMarker(wsDir, name string, data []byte) error {
 	}
 	defer dir.Close()
 	return safeio.WriteFileAt(dir, name, data, 0o644)
+}
+
+// replaceWorkspaceMarker is writeWorkspaceMarker for a marker other commands
+// may be reading at the same time: the debt must never be seen half-written.
+func replaceWorkspaceMarker(wsDir, name string, data []byte) error {
+	dir, err := safeio.OpenDir(filepath.Join(wsDir, ".slate"))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return safeio.ReplaceFileAt(dir, name, data, 0o644)
 }
 
 func removeWorkspaceMarker(wsDir, name string) error {

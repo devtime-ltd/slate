@@ -134,7 +134,99 @@ the next entry's variant choice; a failed first-run launch re-writes
 `agentFresh` honours it ahead of SLATE_FRESH, which only the hooks carry, and
 bareness, which a provisioned workspace no longer has: a `slate agent` started
 from a tmux session or a later shell has neither, and the owed first-run entry
-would otherwise fall through to the thereafter variant. A bail of the thereafter variant retries the
+would otherwise fall through to the thereafter variant. The marker's content
+is the baseline (`firstRunDebt`: HEAD and `worktreeFingerprint`, a hash over
+each tracked path that differs from HEAD and each untracked path, with its
+size, mode, mtime and first megabyte read through `safeio.OpenFileAt` so
+nothing container-sized is buffered, with symlinks by target
+(`safeio.ReadlinkAt`), unreadable or deleted files by metadata
+(`safeio.StatAt`), directories git could not open (its LC_ALL=C warning,
+parsed by `unopenedDirectory`; a name holding a newline spreads the warning
+over two lines, so a warning the parser cannot account for fails every
+listing that saw it, the teardown status included,
+`TestUnopenableDirectoryWithANewlineFailsClosed`) by mtime and an untracked embedded repository
+(listed as `name/`) by its own commit like a submodule
+(`TestFingerprintSeesEmbeddedRepositoryCommits`), every lookup through the pinned
+worktree fd; taken when the debt was recorded,
+after `--adopt` has copied changes in, and re-taken after a lifecycle by the
+closure `provisioningBaselineRefresh` hands out beforehand, when the debt was
+outstanding and either its `provisioning` window is still open (set at a
+non-bare creation or by that closure when it finds the tree untouched, closed
+by `markProvisioned` once a lifecycle fully succeeds or by the refresh itself,
+so an attempt that fails part way leaves the retry free to refresh) or the tree
+was untouched at that point, so a lifecycle
+hook's files are not a session's work while out-of-band work already present
+keeps its evidence; the background provisioner refreshes only when launched
+without a hook alongside (`_provision --refresh-debt`) or when that hook
+returned inside the launch floor and so hosted no session (`noteHookOutcome`
+leaves `.slate/agent-hook-bailed` for `provisionRefreshWanted`, and refreshes
+itself when the provisioner has already gone), and otherwise only closes the
+window. A first entry with no baseline yet takes one before its command runs. A failed first-run launch keeps a recorded
+baseline for the same reason. `agentFresh` treats a `.slate` it cannot open
+safely, or anything planted at a marker's name, as non-fresh; only a
+genuinely absent directory falls back to `SLATE_FRESH`, and even then a worked
+tree wins). A submodule in the listing is hashed by its own commit only, read
+from its files through the pinned descriptors (`submoduleHead`: the `.git`
+pointer, then `HEAD` and its ref or `packed-refs`). The pointer is
+container-written, so the git dir it names may only lie under the worktree's
+registered git dir, where git keeps a linked worktree's submodules, or a main
+checkout's own `.git`, and is descended from that root with pinned opens
+(`submoduleGitDir`; `TestFingerprintRefusesASubmodulePointerEscape`); git never runs inside it,
+because a submodule's config is container-writable and `core.fsmonitor` names
+a command for git to execute, so the fingerprint's listings and the legacy
+status pass `--ignore-submodules=dirty` and every git slate runs carries
+`-c core.fsmonitor=false` (`TestFingerprintRunsNothingFromASubmodule` proves
+nothing executes). The debt marker is published atomically
+(`replaceWorkspaceMarker`: `safeio.ReplaceFileAt` writes a sibling created
+exclusively for the call, so two publishes never share one and nothing
+planted at a predictable name beside the marker blocks it), a first entry or
+first-run retry baselines before
+its command runs and never after, and the foreground and background refreshes
+run as `provisionOpts.landed` inside the provisioning lock; the one refresh
+after the lock is for a hook that bailed after the in-lock decision
+(`provisionSecondLook`, which consults nothing else), and the in-lock
+decision consumes the licence whatever the launch, so one left by a
+provisioning that failed before its second look never reaches a later one's.
+A baseline that cannot be taken still records the provisioning window
+(`TestRecordFirstRunDebtKeepsTheWindowWithoutABaseline`). Uncommitted changes inside a submodule are therefore not
+evidence for the variant choice, by design. `worktreeStatusRaw`, which guards
+`slate done`'s teardown, keeps git's default submodule handling so that dirty
+submodule work stays visible there (`TestDirtyWorktreeSummarySeesDirtySubmodules`)
+and lists a directory git warned it could not open as untracked
+(`TestDirtyWorktreeSummarySeesUnopenableDirectories`). With the debt still
+recorded `agentWorked` flips the choice to the thereafter variant when HEAD,
+the HEAD reflog's length (a commit later reset away still grew it; a pruned
+log is a mismatch too), the staged entries (`--cached --raw`, so a restaged
+blob counts) or the fingerprint has changed since, or when git's output,
+stderr included, outgrows `gitOutputLimit`, the content the fingerprint reads
+outgrows `fingerprintBudget` (a gibibyte in all, whatever the container has
+listed; `TestAgentWorkedFailsClosedOnAHugeTree`), HEAD cannot be named, the marker
+is corrupt, the reflog cannot be read or the baseline was taken with no reflog
+at all (`core.logAllRefUpdates` off leaves a worktree none, and a commit reset
+back would then leave no trace; `TestAgentFreshWithoutAReflogFailsClosed`): a
+tree too large or too broken to judge reads as work. The reflog is read from the registered git dir's
+`logs/HEAD` (`headReflog`), since `git reflog show HEAD` falls through to the
+branch's log when the worktree has none. The creation hook's own entry,
+`SLATE_FRESH=1` with the provisioning window still open, is the first entry
+whatever the concurrent provisioner has written so far: an agent session slate didn't launch leaves no
+marker, and the bail retry covers a worked worktree with nothing to continue.
+A marker without a baseline (written before there was one) falls back to the
+worktree's own HEAD reflog (`headMoved`: any entry away from the checkout
+commit, so a commit later reset back still counts, and no reflog fails closed
+the same way), a dirty tree and any
+directory git warned it could not open. Both reads go
+through `registeredGitDir`/`gitFor`, the main checkout's registration of the
+worktree, never its container-writable `.git` pointer (a worktree the main
+checkout does not register gets no baseline and reads as worked,
+`TestAgentFreshFailsClosedWithoutARegistration`), and run git with the
+worktree as its working directory, since `ls-files --others` lists only the
+subtree under git's own cwd and relative to it
+(`TestFingerprintIgnoresTheProcessDirectory`); `worktreeStatusRaw`
+pins `--untracked-files=normal` and drops the generated `.env.container` and
+`.slate/`. `agentFresh` judges marker presence through a pinned `.slate` fd
+(`safeio.RegularFileAt`, no symlink following), and `--continue`/`--fresh`
+force a variant, skip that scan entirely and disable the retry (`forced` in
+`runAgent`). A bail of the thereafter variant retries the
 first-run one once (the stale `claude --continue` shape: it presumed a session
 the workspace hasn't got, and exits 0 or 1 depending on the claude build);
 signal deaths and 126/127 don't retry, the first being the launch stopped from

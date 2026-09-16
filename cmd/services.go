@@ -94,9 +94,14 @@ func isInteractiveTerminal() bool {
 // provisionOpts captures the variations between fresh-workspace creation,
 // idempotent up, and the bg worker re-invocation.
 type provisionOpts struct {
-	fresh bool
-	build bool
-	wipe  bool
+	fresh       bool
+	build       bool
+	wipe        bool
+	refreshDebt bool
+	// landed runs once the lifecycle has fully succeeded, still under the
+	// provisioning lock, so an entry cannot slip in between it and the
+	// baseline it refreshes
+	landed func()
 }
 
 func lifecycleLabel(fresh bool) string {
@@ -179,6 +184,9 @@ func runWorkspaceLifecycle(env compose.Env, name, wsDir, hostname string, cfg co
 	fmt.Println(tick() + " " + name + " ready")
 	fmt.Println()
 	fmt.Println(workspaceURLBlock(env, hostname, cfg, proxyConfig))
+	if opts.landed != nil {
+		opts.landed()
+	}
 	return nil
 }
 

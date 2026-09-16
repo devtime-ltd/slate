@@ -9,10 +9,13 @@
 package safeio
 
 import (
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -73,6 +76,190 @@ func WriteFileAt(dir *os.File, name string, data []byte, perm os.FileMode) (err 
 	if err := f.Truncate(0); err != nil {
 		return err
 	}
+	return writeFull(f, data)
+}
+
+// ReadFileAt reads rel through OpenFileAt, refusing a file larger than limit
+// bytes so a container cannot make the host read something enormous.
+func ReadFileAt(dir *os.File, rel string, limit int64) ([]byte, error) {
+	f, err := OpenFileAt(dir, rel)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s is larger than %d bytes; refusing to read", rel, limit)
+	}
+	return data, nil
+}
+
+// OpenFileAt opens rel, a slash-separated path under dir, for reading:
+// descending each directory with OpenDirAt and opening the leaf with
+// O_NOFOLLOW and O_NONBLOCK, so a symlink, FIFO or device planted anywhere on
+// the path is refused rather than followed or blocked on. The caller closes
+// the returned regular file.
+func OpenFileAt(dir *os.File, rel string) (*os.File, error) {
+	parent, leaf, done, err := descend(dir, rel)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	fd, err := unix.Openat(int(parent.Fd()), leaf,
+		unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	f := os.NewFile(uintptr(fd), leaf)
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("%s is not a regular file; refusing to read", rel)
+	}
+	return f, nil
+}
+
+// StatAt stats rel under dir without following a symlink at any component;
+// a symlink leaf is reported as itself.
+func StatAt(dir *os.File, rel string) (unix.Stat_t, error) {
+	var st unix.Stat_t
+	parent, leaf, done, err := descend(dir, rel)
+	if err != nil {
+		return st, err
+	}
+	defer done()
+	err = unix.Fstatat(int(parent.Fd()), leaf, &st, unix.AT_SYMLINK_NOFOLLOW)
+	return st, err
+}
+
+// ReadlinkAt returns the target of the symlink at rel under dir, descending
+// without following any component.
+func ReadlinkAt(dir *os.File, rel string) (string, error) {
+	parent, leaf, done, err := descend(dir, rel)
+	if err != nil {
+		return "", err
+	}
+	defer done()
+	for size := 256; size <= 1<<16; size *= 2 {
+		buf := make([]byte, size)
+		n, err := unix.Readlinkat(int(parent.Fd()), leaf, buf)
+		if err != nil {
+			return "", err
+		}
+		if n < size {
+			return string(buf[:n]), nil
+		}
+	}
+	return "", fmt.Errorf("%s: link target too long", rel)
+}
+
+// descend pins the directory holding rel's leaf, one OpenDirAt per component,
+// and returns the leaf; done releases the pinned parent.
+func descend(dir *os.File, rel string) (parent *os.File, leaf string, done func(), err error) {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	parent = dir
+	for _, name := range parts[:len(parts)-1] {
+		next, err := OpenDirAt(parent, name)
+		if parent != dir {
+			parent.Close()
+		}
+		if err != nil {
+			return nil, "", nil, err
+		}
+		parent = next
+	}
+	done = func() {
+		if parent != dir {
+			parent.Close()
+		}
+	}
+	leaf = parts[len(parts)-1]
+	if err := checkLeaf(leaf); err != nil {
+		done()
+		return nil, "", nil, err
+	}
+	return parent, leaf, done, nil
+}
+
+// ExistsAt reports whether anything at all sits at name directly under dir,
+// without following a symlink there.
+func ExistsAt(dir *os.File, name string) bool {
+	if err := checkLeaf(name); err != nil {
+		return false
+	}
+	var st unix.Stat_t
+	return unix.Fstatat(int(dir.Fd()), name, &st, unix.AT_SYMLINK_NOFOLLOW) == nil
+}
+
+// RegularFileAt reports whether name directly under dir is a regular file,
+// without following a symlink planted there.
+func RegularFileAt(dir *os.File, name string) bool {
+	if err := checkLeaf(name); err != nil {
+		return false
+	}
+	var st unix.Stat_t
+	if err := unix.Fstatat(int(dir.Fd()), name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return false
+	}
+	return st.Mode&unix.S_IFMT == unix.S_IFREG
+}
+
+// ReplaceFileAt publishes data at name in one step: written to a sibling
+// created exclusively for this call, then renamed over name, so a reader
+// sees the old content or the new and never a partial write, and two
+// replacements never share a sibling. The rename refuses nothing at name:
+// a planted link or FIFO there is simply replaced.
+func ReplaceFileAt(dir *os.File, name string, data []byte, perm os.FileMode) (err error) {
+	if err := checkLeaf(name); err != nil {
+		return err
+	}
+	tmp, f, err := createSiblingAt(dir, name, perm)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			unix.Unlinkat(int(dir.Fd()), tmp, 0)
+		}
+	}()
+	if err = writeFull(f, data); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return unix.Renameat(int(dir.Fd()), tmp, int(dir.Fd()), name)
+}
+
+// createSiblingAt opens a new file beside name that no other call holds:
+// O_EXCL on a random suffix, tried again on a collision.
+func createSiblingAt(dir *os.File, name string, perm os.FileMode) (string, *os.File, error) {
+	for {
+		var suffix [6]byte
+		if _, err := rand.Read(suffix[:]); err != nil {
+			return "", nil, err
+		}
+		tmp := fmt.Sprintf("%s.%x.tmp", name, suffix)
+		fd, err := unix.Openat(int(dir.Fd()), tmp,
+			unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(perm))
+		if err == nil {
+			return tmp, os.NewFile(uintptr(fd), tmp), nil
+		}
+		if !errors.Is(err, unix.EEXIST) {
+			return "", nil, err
+		}
+	}
+}
+
+func writeFull(f *os.File, data []byte) error {
 	for len(data) > 0 {
 		n, err := f.Write(data)
 		if err != nil {
