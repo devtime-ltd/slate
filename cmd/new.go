@@ -228,7 +228,7 @@ func createWorkspace(name, branch string, spec baseSpec, bg, cd, adopt, bare boo
 		return fmt.Errorf("generating .env.container: %w", err)
 	}
 	warnOnMarkerError("an agent entry made outside the new:/up: hooks will get the thereafter variant",
-		writeWorkspaceMarker(wsDir, firstRunPending, nil))
+		recordFirstRunDebt(mainRoot, wsDir, !bare))
 
 	added, err := scaffold.EnsureGitignore(mainRoot)
 	if err != nil {
@@ -277,6 +277,7 @@ func createWorkspace(name, branch string, spec baseSpec, bg, cd, adopt, bare boo
 		return runBackgroundProvision(cfg, name, wsDir, opts, cd, cfg.New)
 	}
 
+	opts.landed = provisioningBaselineRefresh(mainRoot, wsDir)
 	if err := runWorkspaceLifecycle(env, name, wsDir, hostname, cfg, proxyConfig, opts); err != nil {
 		return fmt.Errorf("%w\n\nThe worktree is intact — resume provisioning with:\n  slate up %s", err, name)
 	}

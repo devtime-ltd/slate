@@ -198,45 +198,67 @@ func reverifyUnchanged(ev *landedEvidence, wsDir string) string {
 // worktreeStatus summarises a worktree's uncommitted changes (informational,
 // e.g. the rm confirmation), reading via the worktree's own git dir.
 func worktreeStatus(wsDir string) (string, bool, error) {
-	c := exec.Command("git", "status", "--porcelain")
-	c.Dir = wsDir
-	out, err := c.Output()
-	if err != nil {
-		return "", false, fmt.Errorf("git status failed in %s: %v", wsDir, err)
-	}
-	return parseStatus(string(out))
+	return worktreeStatusFor("", wsDir)
 }
 
 // worktreeStatusFor is worktreeStatus anchored to the main checkout's
 // registration when gitDir is set (so a swapped `.git` can't hide changes from
 // a safety check), falling back to the work tree's own git otherwise.
 func worktreeStatusFor(gitDir, workTree string) (string, bool, error) {
-	if gitDir == "" {
-		return worktreeStatus(workTree)
-	}
-	c := exec.Command("git", "--git-dir="+gitDir, "--work-tree="+workTree, "status", "--porcelain")
-	out, err := c.Output()
+	raw, err := worktreeStatusRaw(gitDir, workTree)
 	if err != nil {
-		return "", false, fmt.Errorf("git status failed for %s: %v", workTree, err)
+		return "", false, err
 	}
-	return parseStatus(string(out))
+	return parseStatus(raw)
 }
 
-// parseStatus counts porcelain status lines, ignoring the slate-generated
-// .env.container while it is merely untracked.
-func parseStatus(porcelain string) (string, bool, error) {
-	body := strings.TrimSpace(porcelain)
-	if body == "" {
-		return "", false, nil
+// worktreeStatusRaw pins --untracked-files=normal: status.showUntrackedFiles=no
+// would hide untracked work and =all would list .slate/ file by file. Dirty
+// submodules stay visible, and a directory git warned it could not open
+// (left out of the listing, exit 0) is listed as untracked: this status
+// guards slate done's teardown.
+func worktreeStatusRaw(gitDir, workTree string) (string, error) {
+	out, warnings, err := gitForRaw(gitDir, workTree, "status", "--porcelain", "--untracked-files=normal")
+	if err != nil {
+		return "", fmt.Errorf("git status failed in %s: %v", workTree, err)
 	}
+	unopened, err := unopenedDirectories(warnings)
+	if err != nil {
+		return "", fmt.Errorf("git status in %s: %w", workTree, err)
+	}
+	var listing strings.Builder
+	listing.Write(out)
+	for _, dir := range unopened {
+		fmt.Fprintf(&listing, "?? %s/\n", dir)
+	}
+	return listing.String(), nil
+}
+
+// slateGenerated names the entries slate itself writes: .env.container and
+// the .slate/ directory's contents. A plain file or link named .slate is not
+// one of them.
+func slateGenerated(path string) bool {
+	return path == ".env.container" || path == ".slate/" || strings.HasPrefix(path, ".slate/")
+}
+
+// statusLines keeps the porcelain lines that are work, dropping the
+// slate-generated .env.container and .slate/ while they are merely untracked.
+// The path starts after exactly one separator space; its own whitespace is
+// part of the name.
+func statusLines(porcelain string) []string {
+	var lines []string
+	for _, line := range strings.Split(porcelain, "\n") {
+		if len(line) < 4 || (strings.HasPrefix(line, "?? ") && slateGenerated(line[3:])) {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func parseStatus(porcelain string) (string, bool, error) {
 	var modified, untracked int
-	for _, line := range strings.Split(body, "\n") {
-		if len(line) < 3 {
-			continue
-		}
-		if strings.HasPrefix(line, "??") && strings.TrimSpace(line[2:]) == ".env.container" {
-			continue
-		}
+	for _, line := range statusLines(porcelain) {
 		if strings.HasPrefix(line, "??") {
 			untracked++
 		} else {
@@ -375,9 +397,12 @@ func cwdIsInside(dir string) bool {
 	return strings.HasPrefix(cwd, dir+string(filepath.Separator))
 }
 
-// dirtyWorktreeSummary is worktreeStatus without the error, for callers that
-// treat an unreadable status as "not dirty" (the rm confirmation prompt).
+// dirtyWorktreeSummary is worktreeStatus for callers that only warn (the rm
+// confirmation prompt): a status that cannot be taken warns with its reason.
 func dirtyWorktreeSummary(wsDir string) (string, bool) {
-	summary, dirty, _ := worktreeStatus(wsDir)
+	summary, dirty, err := worktreeStatus(wsDir)
+	if err != nil {
+		return "could not verify: " + err.Error(), true
+	}
 	return summary, dirty
 }

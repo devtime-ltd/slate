@@ -31,8 +31,34 @@ func TestCreateWorkspaceOwesFirstRunEntry(t *testing.T) {
 	if err := os.Remove(unprovisionedMarker(wsDir)); err != nil {
 		t.Fatal(err)
 	}
-	if !agentFresh(wsDir) {
+	if !agentFresh(mainRoot, wsDir) {
 		t.Error("a new workspace entered outside the hooks should still get the first-run variant")
+	}
+	if debt := readFirstRunDebt(wsDir); debt.Head != landedGitOut(t, wsDir, "rev-parse", "HEAD") || debt.Provisioning {
+		t.Errorf("a bare workspace should record its HEAD as the baseline with no provisioning window, got %+v", debt)
+	}
+}
+
+// --adopt carries the main checkout's changes in before the debt is recorded,
+// so the first entry is still the first.
+func TestCreateWorkspaceAdoptedChangesAreNotWork(t *testing.T) {
+	mainRoot := newTestProject(t)
+	if err := os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte(generateSlateYml("laravel")+"\n# local edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := createWorkspace("ws", "", baseSpec{}, false, false, true, true); err != nil {
+		t.Fatalf("slate new --adopt --bare: %v", err)
+	}
+	wsDir := filepath.Join(mainRoot, ".slate", "workspaces", "ws")
+	if _, dirty := dirtyWorktreeSummary(wsDir); !dirty {
+		t.Fatal("the scenario needs the adopted edit present in the worktree")
+	}
+	t.Setenv("SLATE_FRESH", "")
+	if err := os.Remove(unprovisionedMarker(wsDir)); err != nil {
+		t.Fatal(err)
+	}
+	if !agentFresh(mainRoot, wsDir) {
+		t.Error("adopted changes should not make a new workspace look worked")
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestWriteFileAtRefusesSymlink(t *testing.T) {
@@ -190,5 +192,171 @@ func TestWriteFileAtTruncatesExisting(t *testing.T) {
 	got, _ := os.ReadFile(filepath.Join(root, "f"))
 	if string(got) != "new" {
 		t.Errorf("content = %q, want new (old content must be truncated)", got)
+	}
+}
+
+func TestReadFileAtRefusesLinksAndFIFOs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sub", "deep", "file.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(outside), filepath.Join(root, "linkdir")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(root, "fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+
+	if got, err := ReadFileAt(dir, "sub/deep/file.txt", 5); err != nil || string(got) != "hello" {
+		t.Errorf("nested regular file: got %q, %v", got, err)
+	}
+	if _, err := ReadFileAt(dir, "sub/deep/file.txt", 4); err == nil {
+		t.Error("a file over the limit should be refused")
+	}
+	if _, err := ReadFileAt(dir, "link.txt", 1<<20); err == nil {
+		t.Error("a symlink leaf should be refused")
+	}
+	if _, err := ReadFileAt(dir, "linkdir/outside.txt", 1<<20); err == nil {
+		t.Error("a symlinked directory on the path should be refused")
+	}
+	done := make(chan error, 1)
+	go func() { _, err := ReadFileAt(dir, "fifo", 1<<20); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("a FIFO should be refused")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reading a FIFO must not block")
+	}
+}
+
+func TestRegularFileAtIgnoresLinksAndDirs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "file"), filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	for name, want := range map[string]bool{"file": true, "link": false, "dir": false, "missing": false, "../file": false} {
+		if got := RegularFileAt(dir, name); got != want {
+			t.Errorf("RegularFileAt(%q) = %v, want %v", name, got, want)
+		}
+	}
+	for name, want := range map[string]bool{"file": true, "link": true, "dir": true, "missing": false, "../file": false} {
+		if got := ExistsAt(dir, name); got != want {
+			t.Errorf("ExistsAt(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestStatAtAndReadlinkAtNeverFollow(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sub", "file.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("secret!!"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(outside), filepath.Join(root, "linkdir")); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+
+	if st, err := StatAt(dir, "sub/file.txt"); err != nil || st.Size != 5 {
+		t.Errorf("StatAt(sub/file.txt): size %d, %v", st.Size, err)
+	}
+	if st, err := StatAt(dir, "link.txt"); err != nil || st.Mode&unix.S_IFMT != unix.S_IFLNK {
+		t.Errorf("StatAt(link.txt) should report the link itself, got mode %o, %v", st.Mode&unix.S_IFMT, err)
+	}
+	if _, err := StatAt(dir, "linkdir/outside.txt"); err == nil {
+		t.Error("StatAt through a symlinked directory should be refused")
+	}
+	if target, err := ReadlinkAt(dir, "link.txt"); err != nil || target != outside {
+		t.Errorf("ReadlinkAt(link.txt) = %q, %v", target, err)
+	}
+	if _, err := ReadlinkAt(dir, "linkdir/outside.txt"); err == nil {
+		t.Error("ReadlinkAt through a symlinked directory should be refused")
+	}
+}
+
+func TestReplaceFileAtPublishesWholeContent(t *testing.T) {
+	root := t.TempDir()
+	dir, err := OpenDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	if err := ReplaceFileAt(dir, "marker", []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReplaceFileAt(dir, "marker", []byte("second"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "marker"))
+	if err != nil || string(got) != "second" {
+		t.Errorf("marker = %q, %v", got, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(root, "marker.*.tmp")); len(left) != 0 {
+		t.Errorf("the sibling should be gone after the rename, found %v", left)
+	}
+}
+
+// The sibling belongs to the call: something planted at a predictable name
+// beside the marker neither blocks the publish nor is written through.
+func TestReplaceFileAtOwnsItsSibling(t *testing.T) {
+	root := t.TempDir()
+	dir, err := OpenDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	if err := unix.Mkfifo(filepath.Join(root, "marker.tmp"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReplaceFileAt(dir, "marker", []byte("published"), 0o644); err != nil {
+		t.Fatalf("a FIFO beside the marker must not block the publish: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "marker"))
+	if err != nil || string(got) != "published" {
+		t.Errorf("marker = %q, %v", got, err)
+	}
+	if info, err := os.Lstat(filepath.Join(root, "marker.tmp")); err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+		t.Errorf("the planted FIFO should be untouched, got %v %v", info, err)
 	}
 }

@@ -16,9 +16,10 @@ import (
 )
 
 var (
-	provisionFresh bool
-	provisionBuild bool
-	provisionWipe  bool
+	provisionFresh       bool
+	provisionBuild       bool
+	provisionWipe        bool
+	provisionRefreshDebt bool
 )
 
 // provisionCmd is the slow-path worker invoked in the background by --bg.
@@ -35,6 +36,7 @@ func init() {
 	provisionCmd.Flags().BoolVar(&provisionFresh, "fresh", false, "Treat as fresh provision (new workspace lifecycle)")
 	provisionCmd.Flags().BoolVar(&provisionBuild, "build", false, "Force image rebuild")
 	provisionCmd.Flags().BoolVar(&provisionWipe, "wipe", false, "Run compose down -v first")
+	provisionCmd.Flags().BoolVar(&provisionRefreshDebt, "refresh-debt", false, "Fold the lifecycle's files into the first-run baseline (no hook session runs alongside)")
 	rootCmd.AddCommand(provisionCmd)
 }
 
@@ -81,11 +83,25 @@ func runProvision(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	return runWorkspaceLifecycle(env, name, wsDir, hostname, cfg, proxyConfig, provisionOpts{
-		fresh: provisionFresh,
-		build: provisionBuild,
-		wipe:  provisionWipe,
-	})
+	opts := provisionOpts{
+		fresh:       provisionFresh,
+		build:       provisionBuild,
+		wipe:        provisionWipe,
+		refreshDebt: provisionRefreshDebt,
+	}
+	refresh := provisioningBaselineRefresh(mainRoot, wsDir)
+	opts.landed = func() {
+		if provisionRefreshWanted(opts, wsDir) {
+			refresh()
+		} else {
+			markProvisioned(wsDir)
+		}
+	}
+	if err := runWorkspaceLifecycle(env, name, wsDir, hostname, cfg, proxyConfig, opts); err != nil {
+		return err
+	}
+	provisionSecondLook(wsDir, refresh)
+	return nil
 }
 
 // runBackgroundProvision forks the bg provisioner, then runs the `new:` hook
@@ -93,12 +109,19 @@ func runProvision(cmd *cobra.Command, args []string) error {
 // (cd=true), or prints the path and exits. Never the up hook: the containers
 // are still provisioning; the new hook exists precisely to run before them.
 func runBackgroundProvision(cfg config.ProjectConfig, name, wsDir string, opts provisionOpts, cd bool, newHook string) error {
+	// with no hook session alongside, the provisioner may fold its lifecycle's
+	// files into the baseline
+	opts.refreshDebt = !(cd && newHook != "")
 	if err := detachProvision(name, wsDir, opts); err != nil {
 		return err
 	}
 	if cd && newHook != "" {
-		if err := runHostCommand(cfg, newHook, name, wsDir, opts.fresh); err != nil {
+		run, err := runHostCommandDetail(cfg, newHook, name, wsDir, opts.fresh, nil, false)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
+		}
+		if mainRoot, err := workspace.MainRoot(); err == nil {
+			noteHookOutcome(mainRoot, wsDir, run)
 		}
 		return spawnShellAt(wsDir)
 	}
@@ -139,6 +162,9 @@ func detachProvision(name, wsDir string, opts provisionOpts) error {
 	}
 	if opts.wipe {
 		cmdArgs = append(cmdArgs, "--wipe")
+	}
+	if opts.refreshDebt {
+		cmdArgs = append(cmdArgs, "--refresh-debt")
 	}
 
 	cmd := exec.Command(exe, cmdArgs...)

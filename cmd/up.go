@@ -126,6 +126,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return runBackgroundProvision(cfg, name, wsDir, opts, cd, "")
 	}
 
+	opts.landed = provisioningBaselineRefresh(mainRoot, wsDir)
 	if err := runWorkspaceLifecycle(env, name, wsDir, hostname, cfg, proxyConfig, opts); err != nil {
 		return err
 	}
