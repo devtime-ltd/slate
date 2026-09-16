@@ -74,6 +74,7 @@ var noUpdateCheck = map[string]bool{
 	"doctor":                        true,
 	"completion":                    true,
 	"help":                          true,
+	"where":                         true,
 	cobra.ShellCompRequestCmd:       true,
 	cobra.ShellCompNoDescRequestCmd: true,
 }

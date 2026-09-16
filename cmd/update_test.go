@@ -401,6 +401,7 @@ func TestSkipsUpdateCheck(t *testing.T) {
 		"doctor":         true,
 		"completion zsh": true,
 		"help":           true,
+		"where":          true,
 		"__complete":     true,
 		"ls":             false,
 		"up":             false,

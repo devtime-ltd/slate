@@ -124,7 +124,11 @@ func WorkspacesRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, ".slate", "workspaces"), nil
+	return WorkspacesRootIn(root), nil
+}
+
+func WorkspacesRootIn(mainRoot string) string {
+	return filepath.Join(mainRoot, ".slate", "workspaces")
 }
 
 func WorkspaceDir(name string) (string, error) {
