@@ -11,6 +11,12 @@ import (
 //go:embed entrypoint.sh
 var Entrypoint []byte
 
+//go:embed dev.zsh
+var DevZsh []byte
+
+//go:embed dev.bash
+var DevBash []byte
+
 func EnsureEntrypoint() (string, error) {
 	dir := config.DataDir()
 	path := filepath.Join(dir, "entrypoint.sh")
