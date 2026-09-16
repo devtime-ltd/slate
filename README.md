@@ -83,6 +83,7 @@ Tools:
   slate pwd                       Print the project's main checkout (pipeable)
   slate cd [name]                 Spawn a sub-shell rooted at the workspace dir
   slate where [project[@ws]]      Print a project or workspace directory (pipeable)
+  slate shellenv <zsh|bash>       Print the dev shell function and its completion
   slate code [name]               Open workspace in your editor
   slate shell [name]              Bash shell in app container
   slate agent [name]              Run the agent command in a workspace (see Agent)
@@ -109,17 +110,14 @@ Add `--project <name>` to any command to target a project other than the current
 
 `slate where [project[@workspace]]` prints a directory: a project's main checkout, a workspace inside it, or the dev root when given nothing. A project is looked up in the registry first, then under the dev root as `<org>/<repo>`, `<org>`, or a bare `<repo>` searched across every org; a name that turns up in more than one org is listed rather than guessed at. The dev root is `~/Development` unless `dev_root` is set in the global config or `SLATE_DEV_ROOT` in the environment, and it is what lets `slate where` reach projects that have never been `slate init`ed. The argument is the only selector: `--project` and `-w` are refused, and `SLATE_WORKSPACE` is ignored, so a bare `slate where` inside an agent session still means the dev root.
 
-A process cannot change its parent shell's directory, so wire it to a function in `~/.zshrc` or `~/.bashrc`:
+A process cannot change its parent shell's directory, so slate prints a function that does. One line in your rc file gives you `dev`, with tab completion over project and workspace names:
 
 ```sh
-dev() {
-  local dir
-  dir=$(slate where "$@") || return
-  cd "$dir"
-}
+eval "$(slate shellenv zsh)"    # ~/.zshrc, after compinit
+eval "$(slate shellenv bash)"   # ~/.bashrc
 ```
 
-`dev` then lands on the dev root, `dev sparta` on the project, and `dev sparta@redis-cache` in the workspace. With slate's completion loaded (`source <(slate completion zsh)` or `source <(slate completion bash)`), `slate where <TAB>` completes project names, `<org>/<repo>` and `<project>@<workspace>`.
+`dev` then lands on the dev root, `dev sparta` on the project, and `dev sparta@redis-cache` in the workspace; `dev spa<TAB>` completes project names, `<org>/<repo>` and `<project>@<workspace>`. In zsh the completion registers through `compdef` when `compinit` has run and through `compctl` otherwise, and a `compctl` registration does not survive a `compinit` that runs later, so the line goes after `compinit` if you use it (the end of `~/.zshrc` is fine). With slate's own completion loaded (`slate completion --help`), `slate where <TAB>` completes project names too; the `project@workspace` form is only reliable through `dev`, because bash's default word breaks split at the `@` before cobra sees the token, and a name that starts with a dash needs the usual `slate where -- <name>` form there, which `dev` supplies for you.
 
 ### Useful flags
 

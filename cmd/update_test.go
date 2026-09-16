@@ -402,6 +402,7 @@ func TestSkipsUpdateCheck(t *testing.T) {
 		"completion zsh": true,
 		"help":           true,
 		"where":          true,
+		"shellenv zsh":   true,
 		"__complete":     true,
 		"ls":             false,
 		"up":             false,

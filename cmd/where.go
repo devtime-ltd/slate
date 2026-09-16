@@ -28,9 +28,8 @@ every org.
 The dev root is ` + defaultDevRoot + ` unless dev_root is set in the global config
 or SLATE_DEV_ROOT in the environment.
 
-A process cannot change its parent shell's directory, so wrap it:
-
-  dev() { local dir; dir=$(slate where "$@") || return; cd "$dir"; }`,
+A process cannot change its parent shell's directory; slate shellenv prints
+a dev function that does, with completion.`,
 	Args:              cobra.MaximumNArgs(1),
 	GroupID:           "tools",
 	ValidArgsFunction: completeWhere,
