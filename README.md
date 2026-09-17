@@ -6,54 +6,23 @@ Each workspace gets its own database, services, and HTTPS URL, spun up from a gi
 
 ## Installation
 
-Slate is a single Go binary. Building it requires [Go 1.26+](https://go.dev/dl/); the scaffolds are embedded at compile time, so there are no other build-time dependencies.
-
-To **run** slate you also need Docker ([OrbStack](https://orbstack.dev) on macOS, recommended, or Docker Engine on Linux) and Git. See [Requirements](#requirements) for details.
+Slate is a single Go binary, installed with [Go 1.26+](https://go.dev/dl/). Running it needs Docker ([OrbStack](https://orbstack.dev) recommended on macOS, Docker Engine on Linux) and Git.
 
 ```sh
-# Install straight from source into $GOBIN (usually ~/go/bin)
 go install github.com/devtime-ltd/slate@latest
 ```
 
-Or from a checkout:
+Ensure it's available on your path (add to .bashrc, .zshrc, etc). `go install` puts it in `$GOBIN`, or `$GOPATH/bin` when that is unset, which is `~/go/bin` by default:
 
 ```sh
-git clone https://github.com/devtime-ltd/slate.git
-cd slate
-go install .
+export PATH="$HOME/go/bin:$PATH"
 ```
-
-Both land in the same place, `$(go env GOBIN)` or `$(go env GOPATH)/bin` if `GOBIN` is unset, so a rebuild replaces the binary you already run. Keep that one directory on your `PATH` and don't copy the binary elsewhere: `slate version` and `slate doctor` warn when another `slate` is on `PATH`, since the shell may be running a stale one. Verify with:
-
-```sh
-slate version            # e.g. slate dev (57ce7762d6aa 2026-09-10T11:47:21Z)
-slate doctor             # checks Docker, Git, and proxy status
-```
-
-Either install reports the commit it was built from and that commit's date, taken from the build info Go embeds; a build from a clean checkout at a tag reports the tag in place of `dev`. To stamp a version by hand, for instance when packaging a release, set it with ldflags (`commit` and `date` can be set the same way):
-
-```sh
-go install -ldflags "-X github.com/devtime-ltd/slate/cmd.version=v1.2.3" .
-```
-
-### Update notices
-
-A release build (`go install ...@latest`, `@v0.1.0`, or a clean checkout at a tag) asks GitHub for the latest release once a day, alongside whatever command you ran, and prints a notice on stderr after the command's output, set off by a blank line, when there is a newer one:
-
-```
-slate v0.2.0 is available (you have v0.1.0): go install github.com/devtime-ltd/slate@latest
-```
-
-The lookup adds at most a second to that one command a day and is silent on any failure; offline, the next try is an hour later. It never runs on `dev` builds (a commit and a tag don't compare), when stderr is not a terminal, inside an agent session (`SLATE_AGENT=1`), or with `SLATE_NO_UPDATE_CHECK=1` set. `slate doctor` is the explicit diagnostic: it always does a live lookup and reports the latest release, with only `SLATE_NO_UPDATE_CHECK` stopping it. `slate version` repeats what the last lookup found, under the same conditions as the notice. The state lives in `~/.local/share/slate/update-check.json`.
 
 ## Quick Start
 
 ```sh
-# One-time setup
-slate setup              # starts the HTTPS proxy + *.test DNS, installs CA cert
-
-# In your project
-slate init laravel       # creates slate.yml
+slate setup              # once: HTTPS proxy + *.test DNS + CA cert
+slate init laravel       # in your project: creates slate.yml
 slate new my-feature     # creates workspace with containers + HTTPS
 ```
 
@@ -64,11 +33,12 @@ Open `https://your-project--my-feature.test` and start developing.
 ```
 Workspace lifecycle:
   slate new <name>                Create a new workspace (containers + HTTPS)
-  slate up [name]                 Start/refresh a workspace (offers to create if missing)
+  slate up [name]                 Start/refresh a workspace
   slate down [name]               Stop (preserves data)
   slate restart [name] [service]  Restart workspace or single service
   slate rm [name]                 Destroy workspace (containers, volumes, worktree)
-  slate done [name]               Destroy a workspace once its work has landed (safe teardown)
+  slate done [name]               Destroy a workspace once its work has landed
+  slate prune                     Delete orphaned workspace branches and worktrees
   slate ls [--all]                List workspaces (current project or all registered)
   slate wait [name]               Block until a background provision finishes
 
@@ -83,7 +53,6 @@ Tools:
   slate pwd                       Print the project's main checkout (pipeable)
   slate cd [name]                 Spawn a sub-shell rooted at the workspace dir
   slate where [project[@ws]]      Print a project or workspace directory (pipeable)
-  slate shellenv <zsh|bash>       Print the dev shell function and its completion
   slate code [name]               Open workspace in your editor
   slate shell [name]              Bash shell in app container
   slate agent [name]              Run the agent command in a workspace (see Agent)
@@ -92,68 +61,57 @@ Tools:
   slate proxy                     Manage the HTTPS proxy
   slate dns                       Manage the *.test DNS resolver
 
-Scaffold tools (from slate.yml):
-  Available commands depend on your scaffold. For Laravel:
+Scaffold tools (from slate.yml), for Laravel:
   slate composer <args>     slate artisan <args>     slate tinker
   slate pint <args>         slate pest <args>
   slate npm <args>          slate npx <args>
   slate mysql [name]        Print DB connection info (--open, --url)
 ```
 
-Omit the workspace name on any command that takes one: if you're inside a workspace it's used, otherwise slate pops an interactive picker over the project's workspaces.
+`slate <command> --help` documents each command's flags.
 
-To target a workspace explicitly (from outside any worktree, or in non-interactive contexts like scripts, CI, and agents), set `SLATE_WORKSPACE=<name>` (honoured by every command, including the scaffold tools) or pass `-w/--workspace <name>` to the lifecycle/utility commands. Examples: `SLATE_WORKSPACE=api slate artisan migrate`, `slate -w api logs`. The scaffold tools (`artisan`, `composer`, `npm`, …) pass **every** argument straight through to the tool, including the tool's own `-w` (e.g. npm workspaces), so target those with `SLATE_WORKSPACE`, not `-w`.
+### Targeting a workspace
 
-Add `--project <name>` to any command to target a project other than the current directory's. The project name comes from the registry (`slate ls --all`).
+Omit the workspace name and slate uses the one you're inside, or pops a picker over the project's workspaces. From outside any worktree, or in scripts, CI and agents, set `SLATE_WORKSPACE=<name>` (honoured by every command that targets a workspace; `slate where` takes its target as an argument instead) or pass `-w <name>` to the lifecycle and utility commands. The scaffold tools pass every argument through, including `-w`, so target those with `SLATE_WORKSPACE`.
 
-### Jumping between projects: `slate where`
+`--project <name>` targets a project other than the current directory's, by its registry name (`slate ls --all`).
 
-`slate where [project[@workspace]]` prints a directory: a project's main checkout, a workspace inside it, or the dev root when given nothing. A project is looked up in the registry first, then under the dev root as `<org>/<repo>`, `<org>`, or a bare `<repo>` searched across every org; a name that turns up in more than one org is listed rather than guessed at. The dev root is `~/Development` unless `dev_root` is set in the global config or `SLATE_DEV_ROOT` in the environment, and it is what lets `slate where` reach projects that have never been `slate init`ed. The argument is the only selector: `--project` and `-w` are refused, and `SLATE_WORKSPACE` is ignored, so a bare `slate where` inside an agent session still means the dev root.
+### Jumping between projects
 
-A process cannot change its parent shell's directory, so slate prints a function that does. One line in your rc file gives you `dev`, with tab completion over project and workspace names:
+`slate where [project[@workspace]]` prints a project's main checkout or a workspace inside it. When no registered project matches, it looks under `dev_root` (default `~/Development`, set in the global config) for a directory of that name. A process can't change its parent shell's directory, so `slate shellenv` prints a `dev` function that does, with tab completion over project and workspace names. One line in your rc file:
 
 ```sh
 eval "$(slate shellenv zsh)"    # ~/.zshrc, after compinit
 eval "$(slate shellenv bash)"   # ~/.bashrc
 ```
 
-`dev` then lands on the dev root, `dev sparta` on the project, and `dev sparta@redis-cache` in the workspace; `dev spa<TAB>` completes project names, `<org>/<repo>` and `<project>@<workspace>`. In zsh the completion registers through `compdef` when `compinit` has run and through `compctl` otherwise, and a `compctl` registration does not survive a `compinit` that runs later, so the line goes after `compinit` if you use it (the end of `~/.zshrc` is fine). With slate's own completion loaded (`slate completion --help`), `slate where <TAB>` completes project names too; the `project@workspace` form is only reliable through `dev`, because bash's default word breaks split at the `@` before cobra sees the token, and a name that starts with a dash needs the usual `slate where -- <name>` form there, which `dev` supplies for you.
+Then `dev project` or `dev project@my-feature`.
 
-### Useful flags
+### Creating and destroying
 
-- `slate new <name> -b <branch>`: custom branch name (default: `slate/<name>`).
-- `slate new <name>`: workspace names are at most 32 characters; an overlong name is offered a whole-word truncation (prompted at a terminal, or suggested in the error for non-interactive callers).
-- `slate new <name> --base <ref>`: fork the new branch from `<ref>` (e.g. `main`, `origin/main`, a tag or SHA) for this one workspace, whatever the project's configured base. Refused if the branch already exists, since its history is already set.
-- `slate new <name> --base-head`: fork from the main checkout's current HEAD instead of the default branch, for when you do want to build on the branch you're sitting on. `--base-head=false` forces the default branch in a project whose `base_from_head` opts out of it.
-- `slate new <name> --bg`: fork the slow phase (build + lifecycle) to the background; the fast phase (worktree + scaffold) runs inline so editing can start immediately. Progress is captured in `.slate/workspaces/<name>/.slate/provision.log` and surfaced as `provisioning` in `slate ls` (`failed` if it errors). While a bg provision is in flight, `slate up` and `slate restart` refuse to touch the workspace; `slate exec`, `slate shell`, and the scaffold tools wait for it instead of failing; `slate wait` blocks until it finishes (non-zero exit + log tail on failure); `slate rm` aborts it as an escape hatch. A configured `new:` hook backgrounds provisioning automatically, no flag needed (see [Agent](#agent--new--up-what-newup-drop-you-into)).
-- `slate done [name]`: the safe alternative to `slate rm` - it destroys the workspace only after proving the work landed (clean worktree, no provisioning in flight, and the branch merged into the default branch by ancestry or a merged PR). If it can't prove that, it refuses with reasons instead of destroying; `slate rm -f` stays the force path. Inside a workspace's own agent session the teardown is staged and runs when the session exits.
-- `slate new <name> --cd` / `--cd=false`: opt in or out of dropping into a shell at the new workspace. Default comes from `auto_cd` in `~/.config/slate/config.yml` (default `true`), suppressed when stdio isn't an interactive terminal so scripts/CI/agents never block on a spawned shell. With `--bg` the shell is spawned immediately; without, after provisioning finishes.
-- `slate new <name> --adopt`: carry your uncommitted changes from the main checkout into the new worktree (tracked changes patched in, untracked files copied). The main checkout is left untouched.
-- `slate new <name> --bare`: worktree + scaffold only, no containers; for quick edits that don't need a running app. Shown as `bare` in `slate ls`; the first `slate up` provisions it with the fresh-workspace lifecycle. Hooks don't fire.
-- `slate up [name] --fresh`: recreate containers + volumes (worktree code preserved) and run the new-workspace lifecycle.
-- `slate up [name] --build`: force image rebuild.
-- `slate rm [name]`: warns if the worktree has uncommitted changes (`3 modified, 1 untracked`) before asking for confirmation; `-f` skips the prompt but still warns to stderr. If your shell's cwd was inside the workspace being destroyed and you're in a slate-spawned shell (auto-cd, `slate cd`), slate exits it so you pop straight back to the shell you came from, history intact; otherwise it drops you into a sub-shell at the project's main checkout (type `exit` to return).
+- `slate new` branches from the repo's default branch as `slate/<name>`. `-b` names the branch, `--base <ref>` forks from another ref, `--base-head` forks from the main checkout's current HEAD.
+- `--adopt` carries the main checkout's uncommitted changes into the new worktree. `--bare` creates the worktree without containers; the first `slate up` provisions it.
+- `--bg` forks the slow phase (build + lifecycle) to the background so editing can start at once. `slate ls` shows `provisioning` (or `failed`), `slate exec` and the scaffold tools wait for it, and `slate wait` blocks until it finishes. A configured `new:` hook backgrounds provisioning automatically.
+- `slate up --fresh` recreates containers and volumes (code preserved); `--build` forces an image rebuild.
+- `slate done` destroys a workspace only after proving its work landed (clean worktree, branch merged by ancestry or a merged PR). If it can't, it refuses with reasons; `slate rm -f` remains the force path.
+- `slate rm` warns about uncommitted changes before confirming. If your shell was inside the workspace, slate exits a slate-spawned shell or drops you into one at the main checkout.
 
-### One-off commands: `slate exec`
+### One-off commands
 
-The scaffold tools cover the everyday commands; `slate exec` runs anything else inside a workspace container:
+`slate exec` runs anything else inside a workspace container, without a TTY by default so it's safe in scripts and agents:
 
 ```sh
 slate exec -- ./vendor/bin/phpstan analyse
-slate exec -- php artisan migrate --force
-slate exec -s vite -- npm run build      # target a different service (default: app)
-slate exec -i -- php artisan tinker      # allocate a TTY for REPLs and prompts
-slate exec --pause-workers -- php artisan migrate:fresh --seed   # stop the queue worker for the duration
+slate exec -s vite -- npm run build                   # another service (default: app)
+slate exec -i -- php artisan tinker                   # allocate a TTY
+slate exec --pause-workers -- php artisan migrate:fresh --seed
 ```
 
-- Runs **without a TTY** by default, so it's safe in scripts, CI, and agents. stdin is still forwarded, so you can pipe input in. Pass `-i/--interactive` when the command needs a terminal.
-- Flag parsing stops at the first positional, so the target command's own flags pass straight through (`slate exec ./vendor/bin/phpstan analyse --memory-limit=1G`); the `--` is optional but makes intent clear. Slate's own flags (`-s`, `-i`, `-w`, `--pause-workers`) go before the command.
-- The workspace is selected like everywhere else: `-w/--workspace`, `SLATE_WORKSPACE`, or the current directory.
-- `--pause-workers` stops the worker services that are running (the queue) for the duration and starts exactly those again after, whether the command succeeds, fails or is interrupted: a live `queue:work` polls the database on every loop iteration and deadlocks against `migrate:fresh`. It is refused when `-s` names one of those workers.
+`--pause-workers` stops the queue worker for the duration: a live `queue:work` deadlocks against `migrate:fresh`.
 
 ## How It Works
 
-Each `slate new` creates a git worktree, branched from the repo's default branch (`base_branch`/`base_from_head` change that, see [Customisation](#customisation)), and spins up a set of Docker containers defined by your scaffold (e.g. PHP + Apache, MySQL, Vite, queue worker, Mailpit). A reverse proxy handles HTTPS termination so you get real `.test` URLs.
+Each `slate new` creates a git worktree and spins up the Docker containers your scaffold defines (e.g. PHP + Apache, MySQL, Vite, queue worker, Mailpit). A Caddy proxy terminates HTTPS so you get real `.test` URLs.
 
 ```
 Host                          Containers (per workspace)
@@ -166,11 +124,9 @@ Host                          Containers (per workspace)
                               └───────────────────────────┘
 ```
 
-Source code is bind-mounted from the host. Package installs (`composer install`, `npm install`) run inside containers so compromised dependencies can't access your SSH keys, cloud credentials, or browser password stores. Dependency caches live inside each workspace at `.slate/composer/` and `.slate/npm-cache/`.
+Source code is bind-mounted from the host. Package installs run inside containers, so a compromised dependency can't reach your SSH keys, cloud credentials, or browser password stores. Dependency caches live in each workspace under `.slate/`.
 
-Install steps in the default lifecycle run through a `retry` helper (3 attempts, linear backoff) so transient registry blips don't fail the whole provision. For private packages, or to dodge GitHub's unauthenticated rate limits, mount a Composer `auth.json` with a token via the `files:` config (see [Customisation](#customisation)).
-
-On first `slate new`, slate appends `.slate/workspaces/` to your project's `.gitignore` so workspace worktrees don't pollute the main checkout's status.
+On first `slate new`, slate adds `.slate/workspaces/` to your project's `.gitignore`.
 
 ## Project Config
 
@@ -180,86 +136,57 @@ A single `slate.yml` in your project root:
 scaffold: laravel
 ```
 
-That's it for most projects. The scaffold provides sensible defaults for the Docker image, services, lifecycle scripts, and available tool commands. When no built-in scaffold fits, a project can define one inline instead; see [Inline scaffolds](#inline-scaffolds).
+That's it for most projects. The scaffold provides the Docker image, services, lifecycle scripts, and tool commands. When no built-in scaffold fits, define one inline; see [Inline scaffolds](#inline-scaffolds).
 
-Each workspace uses the `slate.yml` in its **own worktree** when present, so a branch can change config (packages, hooks, tools) and test it with `slate up` before merging; slate prints a note whenever a workspace's config differs from the main checkout's. Exceptions:
+Each workspace uses the `slate.yml` in its own worktree, so a branch can change config and test it with `slate up` before merging. Exceptions:
 
-- `project:` is always taken from the main checkout so a branch can't change the workspace's identity (hostname, compose project, database names).
-- `agent:`, `new:`, and `up:` run on the host and only ever come from the main checkout (see [Agent](#agent--new--up-what-newup-drop-you-into)).
-- `scaffold:`, `files:`, `database:`, `env:`, `node_image:`, `apt_packages:`, `php_extensions:`, and `php_ini:` (`database`/`env` interpolate into compose files; `node_image` picks the image a container runs; `apt_packages`/`php_extensions`/`php_ini` become root build steps in its Dockerfile) can reach host resources, so they come from **committed content on the workspace branch** (containers can't commit; the `.git` mount is read-only) or, when the branch doesn't commit a `slate.yml`, from the main checkout. Uncommitted worktree edits to them are inert and get a note; commit them on the branch to test. This keeps a rewritten worktree config (e.g. by a compromised dependency) from mounting host files into containers, running an image of its choosing, or baking commands into that image, on your next `slate up`.
+- `project:` always comes from the main checkout, so a branch can't change a workspace's identity.
+- `agent:`, `new:` and `up:` run on the host and only ever come from the main checkout (see [Agent](#agent)).
+- Keys that reach the host (`scaffold:`, `files:`, `database:`, `env:`, `node_image:`, `apt_packages:`, `php_extensions:`, `php_ini:`) come from **committed** content on the workspace branch, never the working copy, so a compromised dependency can't rewrite them and wait for your next `slate up`. Uncommitted edits to them get a note; commit them on the branch to test.
 
-Heavier changes like swapping `scaffold:` usually want `slate up --fresh`.
-
-If `slate.yml` is commited and local overrides are needed (e.g. individiual developer overrides/preferences), a `slate.local.yml` file can be created (add to .gitignore).
+Swapping `scaffold:` usually wants `slate up --fresh`.
 
 ### Customisation
 
 ```yaml
 scaffold: laravel
 
-# Optional: override the auto-derived project name (from directory basename)
-project: my-project
+project: my-project # default: directory basename
+base_branch: develop # default: the repo's default branch
+base_from_head: true # fork from the main checkout's HEAD instead
 
-# Branch new workspaces fork from. Default: the repo's default branch (origin/HEAD,
-# else main/master), or origin/<branch> when there is no local copy. Slate
-# falls back to the main checkout's current HEAD when nothing resolves; a configured
-# base_branch that doesn't resolve is an error instead.
-base_branch: develop
-
-# Fork from the main checkout's current HEAD instead, as slate did before it
-# defaulted to the default branch
-base_from_head: true
-
-# Extra packages for the Docker image
 apt_packages: [ghostscript, imagemagick, libmagickwand-dev]
 php_extensions: [imagick]
-
-# Node image for the vite (laravel) / app (nextjs) container.
-# Defaults: node:24 (laravel), node:24-slim (nextjs). Pin one whose bundled npm
-# satisfies package.json's engines.npm - a mismatched npm rewrites the lockfile
-# to its own resolution on every container start.
-# Host-reaching, so like scaffold/files/database/env it is read from committed
-# content on the branch, not the working copy. On the laravel vite service this
-# is an `image:` and takes effect on the next `slate up`; on the nextjs app
-# service (and for apt_packages / php_extensions / php_ini, which build into the
-# Dockerfile) an existing workspace picks the change up on `slate up --build`.
-# node_image: node:22
-
-# PHP ini overrides (laravel). Defaults: memory_limit=512M, upload/post 100M.
+node_image: node:22 # default: node:24 (laravel), node:24-slim (nextjs)
 php_ini:
-  memory_limit: 1024M
+  memory_limit: 1024M # defaults: memory_limit=512M, upload/post 100M
 
-# Override lifecycle hooks (optional)
-setup: |
+setup: | # lifecycle hook override
   composer config http-basic.nova.laravel.com "$NOVA_USER" "$NOVA_KEY"
   {{SCAFFOLD_DEFAULT}}
 
-# Extra env vars for workspaces (supports placeholders)
 env:
   CUSTOM_VAR: value
   ANALYTICS_DB: "{{DB_NAME:analytics}}"
   REDIS_PASSWORD: "{{GEN_PASSWORD:redis}}"
 
-# Mount host files into containers (e.g. for auth)
-files:
+files: # host files mounted into containers
   ~/.npmrc: /home/node/.npmrc
 ```
 
-Lifecycle hooks (run inside the containers):
-- **`setup`**: runs on every `slate new` and `slate up` (default: install deps + migrate)
-- **`fresh`**: runs after `setup` on `slate new` and `slate up --fresh` (default: fresh DB seed)
-- Use `{{SCAFFOLD_DEFAULT}}` to inject the scaffold's defaults at any point in your override
-- A `retry <cmd>` shell helper is available inside hooks (3 attempts, linear backoff); wrap any flaky network step, e.g. `retry composer install`
-- Worker services (e.g. the queue) are stopped while the hooks run and started after: a live `queue:work` polls the database on every loop iteration and deadlocks against the hooks' migrations. Destructive commands run by hand against a live stack want the same pause; use `slate exec --pause-workers -- php artisan migrate:fresh --seed`
+Pin a `node_image` whose bundled npm satisfies your `engines.npm`, or a mismatched npm rewrites the lockfile on every start. `apt_packages`, `php_extensions` and `php_ini` build into the image, so an existing workspace picks them up on `slate up --build`.
 
-Placeholders (expanded at workspace creation):
-- `{{SCAFFOLD_DEFAULT}}`: scaffold's default script (lifecycle hooks only)
-- `{{GEN_PASSWORD:salt}}`: derived per-workspace password from your installation's secret key
-- `{{DB_NAME:label}}`: safe database name (`workspace_label_hash`, max 44 chars)
+Lifecycle hooks run inside the containers, with worker services paused for the duration:
+
+- **`setup`** runs on every `slate new` and `slate up` (default: install deps + migrate).
+- **`fresh`** runs after `setup` on `slate new` and `slate up --fresh` (default: fresh DB seed).
+- `{{SCAFFOLD_DEFAULT}}` injects the scaffold's default script at that point. A `retry <cmd>` helper (3 attempts) wraps flaky network steps.
+
+Placeholders, expanded at workspace creation: `{{GEN_PASSWORD:salt}}` derives a per-workspace password from your installation's secret key; `{{DB_NAME:label}}` gives a safe database name.
 
 ### Custom tools
 
-Scaffolds register tool commands automatically (e.g. Laravel provides `composer`, `artisan`, `pint`, `pest`, `mysql`). Override or add your own:
+Scaffolds register their tool commands automatically. Add your own, which run a command in a container:
 
 ```yaml
 tools:
@@ -268,199 +195,125 @@ tools:
     command: [php, my-script.php]
 ```
 
-User-defined tools in `slate.yml` are always exec tools (run a command in a container).
+## Agent
 
-## Agent + new + up: what `new`/`up` drop you into
-
-At an interactive terminal, slate drops you into the workspace (the `auto_cd` behaviour) through two hooks: `new:` fires straight after `slate new`'s fast phase, with provisioning forked to the background behind it; `up:` fires once provisioning finishes. Then a shell. `agent` defines the command `slate agent [name]` runs; point the hooks at it to land in your agent:
+At an interactive terminal, `slate new` and `slate up` drop you into the workspace through two hooks: `new:` fires straight after the worktree exists, with provisioning forked to the background behind it; `up:` fires once provisioning finishes. `agent:` is the command `slate agent [name]` runs; point the hooks at it to land in your agent:
 
 ```yaml
 agent:
-  - claude --name "{{PROJECT}}--{{WORKSPACE}}"   # first run
-  - claude --continue                            # thereafter
-new: slate agent   # slate new: runs immediately, containers provision behind it
-up: slate agent    # slate up: runs after provisioning finishes
+  - claude --name "{{PROJECT}}--{{WORKSPACE}}" # first run
+  - claude --continue # thereafter
+new: slate agent
+up: slate agent
 ```
 
-`agent` is either a single command or a `[first-run, thereafter]` pair; the first-run variant is picked on the workspace's first agent entry, whichever way that entry is reached. `slate new` records the debt in `.slate/agent-first-run-pending` and the first session that actually runs settles it, writing `.slate/agent-started`. Because the debt lives in the workspace, an entry that carries no context of its own - a `slate agent` in a tmux session or a shell opened later, rather than through the hooks - still gets the first-run variant it is owed. Workspaces created before the debt marker existed fall back to the older signals, `SLATE_FRESH=1` and bareness. A workspace that still owes its first-run entry but has moved on since the debt was recorded (commits, or uncommitted changes beyond what `--adopt` carried in) gets the thereafter variant first, with the first-run retry described below as the fallback: an agent session slate did not launch (typed into the pane, say) leaves no marker, and starting fresh over it would orphan its conversation. `slate agent --continue` and `slate agent --fresh` name the variant outright, for a launcher that knows which one it wants; neither retries the other. With the pair above, every new workspace starts a claude session named `<project>--<workspace>` (resumable later with `claude --resume <name>`), and re-entry continues where you left off.
+`agent:` is a single command or a `[first-run, thereafter]` pair; the first-run variant runs on the workspace's first agent entry, however that entry is reached. With `new:` configured, `slate new foo` creates the worktree in seconds and runs the hook at once, so the agent starts while the containers come up; `slate exec` and the scaffold tools wait for provisioning, so the agent's first container command simply blocks instead of failing. `slate agent myws -- "review the open PR"` passes arguments through to the agent command (`{{ARGS}}` marks where they land).
 
-With `new:` configured, `slate new foo` needs no flags and no waiting: the worktree and scaffold are created inline (seconds), provisioning forks to the background, and the hook runs immediately, so you brief your agent while the containers come up. The hook's session gets `SLATE_PROVISIONING=1` (0 otherwise) so tooling can tell it started mid-provision, and `slate exec` plus the scaffold tools block on the in-flight provision automatically, so the agent's first container command simply waits instead of failing. `slate wait` is the explicit check (instant when ready, non-zero exit with the log tail when provisioning failed); the `slate brief` cheatsheet tells your agent about it. Both hooks sit behind the same interactive-terminal gate as `auto_cd`, so scripts and CI invoking `slate new` still provision synchronously.
-
-All three commands run in the worktree via `sh -c` with `{{WORKSPACE}}`, `{{PROJECT}}`, and `{{HOSTNAME}}` expanded and `SLATE_WORKSPACE`, `SLATE_PROJECT`, `SLATE_FRESH`, `SLATE_PROVISIONING` in the environment. `slate agent` with no `agent:` configured is an error naming the main checkout's `slate.yml`, and says so explicitly when the workspace's own copy sets one (a common way to configure the agent somewhere slate never reads). The hooks can be anything:
+All three run in the worktree via `sh -c` with `{{WORKSPACE}}`, `{{PROJECT}}` and `{{HOSTNAME}}` expanded and `SLATE_WORKSPACE`, `SLATE_PROJECT`, `SLATE_FRESH` and `SLATE_PROVISIONING` set. They can be anything:
 
 ```yaml
-# a session that survives your terminal app and allows multiple attachments
 up: tmux new-session -A -s {{HOSTNAME}} 'slate agent'
 ```
 
-(`tmux new -A` re-attaches an existing server session, which keeps its original environment, so `SLATE_FRESH` doesn't reliably reach `slate agent` here. The first-run variant is picked from the workspace's recorded debt rather than the environment, so this doesn't affect which variant runs.)
+These commands run on your **host**, so your normal login, skills, MCPs and git access apply. For that reason they are read only from the **main checkout's** `slate.yml`: the worktree is container-writable, and a compromised dependency could otherwise edit it and wait for your next slate command. Workspace-side edits to them are inert and get a note.
 
-`slate agent` passes anything after `--` through to the agent command as extra arguments, appended to whichever variant runs (the first-run retry included): `slate agent myws -- "review the open PR"` runs `claude "review the open PR"` under the example config above. The args are shell-escaped into literal words, so a prompt containing quotes or shell syntax stays a single argument, and nothing the command does to its positional parameters can lose them. Appending is only well-defined for a plain simple command, so an `agent:` containing any shell structure (pipelines, lists, redirects, subshells, comments) is refused when args are passed unless `{{ARGS}}` marks where they belong, e.g. `agent: claude {{ARGS}} | tee agent.log`. `{{ARGS}}` works in simple commands too and expands to nothing when no args are given.
+An `agent:` command that exits within three seconds can't have hosted a session (a `claude --continue` with nothing to continue does exactly this), so slate treats it as a failed launch: it reports what ran, retries the first-run variant if the thereafter one bailed, and leaves a shell in the workspace so a wrapping tmux session survives with the diagnostic on screen. A session that crashes with a non-zero exit gets the same held shell. `slate agent --help` has the details; `SLATE_AGENT_MIN_RUNTIME=0` disables the check.
 
-These commands execute on your **host**: your normal claude login, skills, MCPs, and git access all apply. Because of that, `agent`, `new`, and `up` are always read from the **main checkout's** `slate.yml` and never from the workspace copy: the worktree is writable by container code, so a compromised dependency could otherwise edit `slate.yml` and wait for your next slate command. Workspace-side edits to these fields are inert and get a note saying so; land them in the main checkout to take effect. The blast-radius protection stays where it always was, in the containers that run the app and its dependency installs.
+### Local overrides
 
-### Local overrides (`slate.local.yml`)
-
-An optional, uncommitted `slate.local.yml` next to the main checkout's `slate.yml` overrides the host-side keys per developer: `agent:`, `new:`, `up:`, `doctor:`, and `brief:`. Each key present in the local file replaces the committed value wholesale (a local `agent:` supersedes the whole committed value, pair form included; a present-but-empty key clears it); absent keys fall through to `slate.yml`. Any other key is an error: the overlay exists for per-machine host commands, never for changing what containers run. The first `slate new` after the file appears adds `slate.local.yml` to the project's `.gitignore`, with a note.
-
-The file carries the same trust as the committed `slate.yml`, and the same sourcing rule: it is read **only from the main checkout root**. A `slate.local.yml` inside a workspace worktree is never read (worktrees are container-writable and must never drive host execution) and gets the same inert-edit note as workspace edits to the other host-side keys. One caveat: if your project's compose config bind-mounts the main checkout itself into containers (e.g. an inline scaffold mounting `${MAIN_ROOT}`), the local file becomes container-writable and that guarantee is void - the same trade-off you already accepted for the committed `slate.yml` in that configuration.
-
-A typical use is pinning each workspace's agent session to an account with a directory-mapping account switcher - your machine's convention, without pushing it onto other developers via the committed config. With cswap (claude-swap) as the example switcher:
+An uncommitted `slate.local.yml` next to the main checkout's `slate.yml` overrides the host-side keys per developer: `agent:`, `new:`, `up:`, `doctor:` and `brief:`. Each key present replaces the committed value wholesale; any other key is an error. Slate adds it to `.gitignore` on the next `slate new`. It is read only from the main checkout, never a worktree; mounting the main checkout itself into a container (an inline scaffold using `${MAIN_ROOT}`) makes it container-writable and voids that protection, as it does for `slate.yml`. A typical use is pinning agent sessions to an account switcher without pushing that onto other developers:
 
 ```yaml
-# slate.local.yml (uncommitted)
 agent:
   - cswap run -- claude --name "{{PROJECT}}--{{WORKSPACE}}"
   - cswap run -- claude --continue
 ```
 
-### Project checks and notes: `doctor:` and `brief:`
+### Project checks and notes
 
-Two more host-side keys, valid in `slate.yml` and `slate.local.yml` (local replaces committed wholesale, like the rest):
+`doctor:` is a map of named host checks appended to `slate doctor`; a non-zero exit renders as a warning and never affects the result. `brief:` is a host command whose stdout is appended to `slate brief` under a `## Project notes` heading. Each gets 10 seconds.
 
 ```yaml
 doctor:
-  claude-account: cswap map --resolve .
   vpn: ping -c1 -W1 10.0.0.1
 
 brief: |
   echo "**Account:** $(cswap status --json | jq -r '.accounts[] | select(.active) | .email')"
 ```
 
-`doctor:` is a map of named host checks merged into `slate doctor` after the built-in checks, each run via `sh -c` in the main checkout, in name order. Exit 0 renders as a pass; non-zero renders as a warning with the exit code and the check's combined output, and never affects `slate doctor`'s own result - built-in checks alone decide that. Each check gets 10 seconds before it is killed and reported as timed out. There is no workspace context in `doctor`: `{{PROJECT}}` expands and `SLATE_PROJECT` is set, while `{{WORKSPACE}}`/`{{HOSTNAME}}` stay literal and `SLATE_WORKSPACE` is unset.
-
-`brief:` is a single host command whose stdout is appended to `slate brief`'s output under a `## Project notes` heading - project facts a generated cheatsheet can't know, resolved at print time. It runs in the current workspace's worktree when there is one (so cwd-sensitive tools resolve correctly), otherwise in the main checkout; `{{PROJECT}}`/`SLATE_PROJECT` always apply, `{{WORKSPACE}}`/`{{HOSTNAME}}`/`SLATE_WORKSPACE` only with a workspace context. A non-zero exit or timeout prints a warning to stderr and omits the section, keeping the output clean, pasteable markdown.
-
-### When the agent command never starts
-
-An agent command that returns straight away hasn't hosted a session, whatever its exit code. `claude --continue` with no conversation to continue prints its complaint and exits (0 or 1, depending on the claude build), which reads as a clean quit or an ordinary command failure: either way it takes any enclosing tmux session down with it and nothing records that the session never happened. Slate treats an `agent:` command that exits within three seconds as a failed launch instead of a clean exit:
-
-- it reports which variant ran, how long it lasted, its exit code and the expanded command;
-- it doesn't record the workspace's first agent entry, so the next `slate agent` still gets the first-run variant rather than inheriting the failure; a failed first-run launch re-records the first-run debt (`.slate/agent-first-run-pending`), so the next entry still gets the first-run command it is owed;
-- if the *thereafter* variant is what bailed, it retries the first-run variant once: a `--continue` that returns at once means the session it assumed isn't there, so the first-run command is the one that should have run. Signal deaths and exits meaning the command itself couldn't run (126/127) don't retry: the first is the launch being stopped, the second a config problem that retrying the other variant would mask. Nor does `--continue`, which asked for that variant outright;
-- it records every run's outcome (timestamp, variant, exit code, duration, command) in the workspace's `.slate/agent-last-run`, so even a launch that takes its tmux session down leaves evidence;
-- at a terminal it leaves a shell in the workspace instead of returning, so a tmux session wrapping `slate agent` survives with the diagnostic on screen. `slate agent --no-hold` exits instead, as does any non-interactive invocation.
-
-A session that started (outlived the floor) but ended with a plain non-zero exit gets the same held shell: claude exits 0 from a normal quit and a signal death is you stopping it, so a non-zero end is a crash whose output would otherwise vanish with the tmux session. The agent-started marker is still recorded, because the session existed and the next entry should continue it rather than start over.
-
-Set `SLATE_AGENT_MIN_RUNTIME` (seconds, `0` disables the check) if your `agent:` legitimately hands off and returns at once.
-
-A `new:`/`up:` hook that runs `slate agent` when no `agent:` is configured gets a warning before the hook fires, rather than failing invisibly inside the hook's own process.
-
 ### Slate for agents
 
-Slate is designed to be driven by an LLM running on the host:
-
-- Every command honours `SLATE_WORKSPACE=<name>`, so agents never depend on a cwd or an interactive picker.
-- Non-interactive contexts fail fast with instructions instead of prompting (`slate up missing-ws` errors rather than asking to create; `slate exec` runs without a TTY and forwards stdin).
-- Container commands self-synchronise with background provisioning: `slate exec` and the scaffold tools wait for an in-flight provision, and `slate wait` makes the check explicit.
-- `slate brief` prints a project-aware markdown cheatsheet (workspace targeting, tools, URLs, the container test-database gotcha) for pasting into your `CLAUDE.md`/`AGENTS.md`.
+Slate is designed to be driven by an LLM on the host: every workspace command honours `SLATE_WORKSPACE`, non-interactive contexts fail fast with instructions instead of prompting, container commands wait for an in-flight provision, and `slate brief` prints a project-aware cheatsheet for your `CLAUDE.md` or `AGENTS.md`.
 
 ## Scaffolds
 
-| Scaffold | Stack | Services |
-|----------|-------|----------|
-| `laravel` | PHP 8.3 + Apache, MySQL, Vite, Mailpit | app, queue, mysql, vite, mailpit |
-| `nextjs` | Node 24, PostgreSQL, Mailpit | app, postgres, mailpit |
-| [inline](#inline-scaffolds) | Bring your own compose file | User-defined |
+| Scaffold                    | Stack                                  | Services                         |
+| --------------------------- | -------------------------------------- | -------------------------------- |
+| `laravel`                   | PHP 8.3 + Apache, MySQL, Vite, Mailpit | app, queue, mysql, vite, mailpit |
+| `nextjs`                    | Node 24, PostgreSQL, Mailpit           | app, postgres, mailpit           |
+| [inline](#inline-scaffolds) | Bring your own compose file            | User-defined                     |
 
 ### Inline scaffolds
 
-When no built-in scaffold fits, define one inline by giving `scaffold:` a map instead of a name:
+Give `scaffold:` a map instead of a name:
 
 ```yaml
 scaffold:
   compose: ./slate/compose.yaml
   subdomains:
-    "@":    { service: app, port: 8081 }     # the main <project>--<ws>.test (DNS-style apex)
-    warden: { service: warden, port: 8080 }  # warden.<project>--<ws>.test
+    "@": { service: app, port: 8081 } # <project>--<ws>.test
+    warden: { service: warden, port: 8080 } # warden.<project>--<ws>.test
 ```
 
-- **`compose`** is a committed, project-relative compose file, copied into each workspace's `.slate/compose.yaml`. Its content comes from the workspace branch's committed copy, or the main checkout when the branch doesn't commit one, never from the worktree's working files (a compose file defines mounts, so it's host-reaching config; see [Project Config](#project-config)). Follow the conventions the built-in scaffolds use: bind-mount the worktree as `..:/app`, publish container ports without host numbers (`ports: ["8081"]`) so Docker assigns free ones, and optionally mount `${SLATE_ENTRYPOINT}` as the entrypoint for slate's UID mapping. `${MAIN_ROOT}`, `${APP_UID}`, and `${APP_GID}` interpolate as usual. The Dockerfile is committed too and referenced directly (`build: {context: .., dockerfile: slate/Dockerfile}`).
-- **`subdomains`** declares the HTTPS routes: which service and container port each hostname proxies to. `"@"` is the apex, i.e. the main workspace hostname (quoted, since YAML reserves a bare `@`).
-- Everything else stays in the ordinary keys: `setup:` / `fresh:` (inline scaffolds have no defaults), `tools:`, `env:`, `files:`.
-- Services that bind-mount `/app` get the built-ins' app-like treatment: `app` is the primary (runs the lifecycle, default target for `slate exec`), the rest are stopped while the lifecycle runs and started after (a live worker deadlocks against its migrations, and they don't hot-reload).
+`compose` is a committed, project-relative compose file (read from committed content, like the other host-reaching keys). Follow the built-in scaffolds' conventions: bind-mount the worktree as `..:/app`, publish ports without host numbers (`ports: ["8081"]`), and optionally mount `${SLATE_ENTRYPOINT}` as the entrypoint for UID mapping. `${MAIN_ROOT}`, `${APP_UID}` and `${APP_GID}` interpolate. `subdomains` declares the HTTPS routes, with `"@"` as the main hostname. `setup:`, `fresh:`, `tools:`, `env:` and `files:` work as usual; inline scaffolds have no default hooks. Services that bind-mount `/app` are treated like the built-ins' app services: the first is the primary, the rest are paused while the lifecycle runs.
 
-Name the compose file with a `.tmpl` extension to run it through Go's text/template on the way in, with `vars:` as free-form input:
+A compose file named `*.tmpl` runs through Go's text/template with `vars:` as input (`.Project`, `.Workspace`, `.Hostname`, `.HasMainEnv`, `.Database`, `.Vars`). Reach for it only for structural differences, such as conditionally including a service.
 
-```yaml
-scaffold:
-  compose: ./slate/compose.yaml.tmpl
-  vars:
-    with_warden: true
-```
-
-Template data: `.Project`, `.Workspace`, `.Hostname`, `.HasMainEnv`, `.Database`, and `.Vars`. Most per-workspace variance doesn't need this; compose `${...}` interpolation and `env:` placeholders (`{{DB_NAME:label}}`, `{{GEN_PASSWORD:salt}}`, which share the `{{...}}` syntax and belong in `env:` values, not `.tmpl` files) already cover values. Reach for a template only for structural differences, like conditionally including a service.
-
-`slate init inline` writes a starter slate.yml. The legacy `scaffold: none` still parses and behaves as an inline scaffold with no compose file.
+`slate init inline` writes a starter `slate.yml`.
 
 ### Vite over HTTPS (Laravel)
 
-Inside a workspace, Vite is served over a proxied HTTPS subdomain
-(`https://vite.<project>--<workspace>.test`), not `http://0.0.0.0:5173`. To load
-assets and HMR over HTTPS without mixed-content blocks or Vite's host check, add
-[`@devtime-ltd/vite-plugin-slate`](vite-plugin-slate) to your `vite.config.js`:
-
-```sh
-npm i -D @devtime-ltd/vite-plugin-slate
-```
+Vite is served over a proxied HTTPS subdomain (`https://vite.<project>--<workspace>.test`). Add [`@devtime-ltd/vite-plugin-slate`](vite-plugin-slate) to your `vite.config.js` so assets and HMR load without mixed-content blocks:
 
 ```js
 import slate from "@devtime-ltd/vite-plugin-slate";
 
 export default defineConfig({
-  plugins: [laravel({ /* ... */ }), slate()],
+	plugins: [
+		laravel({
+			/* ... */
+		}),
+		slate(),
+	],
 });
 ```
 
-slate sets `VITE_DEV_SERVER_URL` in the workspace; the plugin reads it to point
-Vite's `origin`/`allowedHosts`/`cors`/`hmr` at the proxy. It's a no-op when that
-var is unset, so `npm run dev` outside slate is unaffected.
+The plugin reads `VITE_DEV_SERVER_URL`, which slate sets in the workspace, and is a no-op outside slate.
 
 ## Global Config
 
 `~/.config/slate/config.yml` (all optional):
 
 ```yaml
-http_port: 80           # default: 80
-https_port: 443         # default: 443
-tls: true               # false for HTTP-only (no certs needed)
+http_port: 80
+https_port: 443
+tls: true # false for HTTP-only (no certs needed)
 secret_key: <generated> # auto-generated on first `slate setup`
-editor: code            # default editor for `slate code` (prompted on first use)
-auto_cd: true           # default: true. When true, `slate new` and `slate up`
-                        # drop into a shell at the workspace dir when ready.
-                        # Override per-invocation with --cd / --cd=false.
-dev_root: ~/Development # default: ~/Development. Where `slate where` looks for
-                        # projects not in the registry, laid out as <org>/<repo>.
-                        # SLATE_DEV_ROOT in the environment overrides it.
+editor: code # for `slate code` (prompted on first use)
+auto_cd: true # `slate new` and `slate up` drop into a shell at the workspace
+dev_root: ~/Development # where `slate where` looks for projects not in the registry
 ```
 
-The registered projects index lives at `~/.config/slate/projects` (one `name=path` entry per line, names assigned at registration and stable across removals).
+The project registry lives at `~/.config/slate/projects`.
 
-## Requirements
+## DNS and networking
 
-- Docker (via [OrbStack](https://orbstack.dev) on macOS, or Docker Engine on Linux)
-- Git
+`slate setup` makes `*.test` resolve locally by running a small dnsmasq container on `127.0.0.1:53`. On macOS it writes `/etc/resolver/test` (one `sudo` prompt); on Linux, point your system resolver at `127.0.0.1` for `*.test` yourself. If `*.test` already resolves, slate leaves it alone.
 
-That's it. Everything else is managed by slate.
-
-`slate setup` also makes `*.test` resolve locally by running a small dnsmasq container on `127.0.0.1:53` and pointing `/etc/resolver/test` at it (one `sudo` prompt, macOS). On Linux the container runs the same way, but you point your system resolver (systemd-resolved/NetworkManager) at `127.0.0.1` for `*.test` yourself. If `*.test` already resolves (e.g. you run your own dnsmasq), slate leaves it alone.
-
-### Docker network limits
-
-Every running workspace takes one Docker network, and Docker allocates each network a subnet from its default address pools. Those pools, not memory or disk, are what caps how many workspaces you can run at once: stock Docker Engine defines 32 (`172.17.0.0/12` at `/16`, plus `192.168.0.0/16` at `/20`) and OrbStack 30. Past that, `slate up` fails with `all predefined address pools have been fully subnetted`.
-
-Slate reclaims what it can. `slate down` sweeps networks left behind by workspaces stopped outside slate (a reboot, an OrbStack restart, a manual `docker stop`), a failed `slate up` retries once after sweeping, and `slate doctor` reports the budget:
-
-```
-  ✔ docker address pools (6 of 30 networks in use, 1 reclaimable)
-```
-
-If you keep more workspaces than that, raise the ceiling in the Docker daemon config. A workspace needs a handful of addresses, not the 254 a `/24` gives it, so a smaller subnet size buys far more networks from the same space. On OrbStack edit `~/.orbstack/config/docker.json` via `orb config docker`, which restarts the engine; on Docker Engine, `/etc/docker/daemon.json`:
+Every running workspace takes one Docker network, and Docker's default address pools cap how many you can run at once: 32 on stock Docker Engine, 30 on OrbStack. `slate doctor` reports the budget and `slate down` reclaims networks left behind by workspaces stopped outside slate. To raise the ceiling, use a smaller subnet size in the daemon config (`orb config docker` on OrbStack, `/etc/docker/daemon.json` on Docker Engine):
 
 ```json
 { "default-address-pools": [{ "base": "10.99.0.0/16", "size": 27 }] }
 ```
 
-That gives 2048 networks of 29 usable addresses each. Pick a base that does not overlap anything you route to, such as a VPN or an office LAN, and note that existing networks keep their current subnets until they are recreated.
-
+Pick a base that doesn't overlap anything you route to, such as a VPN or office LAN.
