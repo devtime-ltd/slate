@@ -29,7 +29,7 @@ The dev root is ` + defaultDevRoot + ` unless dev_root is set in the global conf
 or SLATE_DEV_ROOT in the environment.
 
 A process cannot change its parent shell's directory; slate shellenv prints
-a dev function that does, with completion.`,
+a function that does, named by --name, with completion.`,
 	Args:              cobra.MaximumNArgs(1),
 	GroupID:           "tools",
 	ValidArgsFunction: completeWhere,
