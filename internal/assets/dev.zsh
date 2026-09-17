@@ -1,12 +1,12 @@
-unalias dev 2>/dev/null || true
-function dev {
+unalias {{NAME}} 2>/dev/null || true
+function {{NAME}} {
 	local dir
 	dir=$(slate where -- "$@") || return
 	cd -- "$dir"
 }
 
 # cobra ends its output with a :<directive> line, which only the last line is
-function _dev_candidates {
+function _slate_where_candidates {
 	local -a lines
 	lines=("${(@f)$(slate __complete where -- "$1" 2>/dev/null </dev/null)}")
 	lines=("${(@)lines:#}")
@@ -15,18 +15,18 @@ function _dev_candidates {
 }
 
 if (( $+functions[compdef] )); then
-	function _dev {
+	function _slate_where {
 		(( CURRENT == 2 )) || return 1
 		local -a candidates
-		candidates=("${(@f)$(_dev_candidates "$PREFIX")}")
+		candidates=("${(@f)$(_slate_where_candidates "$PREFIX")}")
 		candidates=("${(@)candidates:#}")
 		compadd -- "${candidates[@]}"
 	}
-	compdef _dev dev
+	compdef _slate_where {{NAME}}
 else
-	function _dev_compctl {
-		reply=("${(@f)$(_dev_candidates "$1")}")
+	function _slate_where_compctl {
+		reply=("${(@f)$(_slate_where_candidates "$1")}")
 		reply=("${(@)reply:#}")
 	}
-	compctl -x 'p[1]' -K _dev_compctl -- dev
+	compctl -x 'p[1]' -K _slate_where_compctl -- {{NAME}}
 fi

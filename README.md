@@ -78,11 +78,11 @@ Omit the workspace name and slate uses the one you're inside, or pops a picker o
 
 ### Jumping between projects
 
-`slate where [project[@workspace]]` prints a project's main checkout or a workspace inside it. When no registered project matches, it looks under `dev_root` (default `~/Development`, set in the global config) for a directory of that name. A process can't change its parent shell's directory, so `slate shellenv` prints a `dev` function that does, with tab completion over project and workspace names. One line in your rc file:
+`slate where [project[@workspace]]` prints a project's main checkout or a workspace inside it. When no registered project matches, it looks under `dev_root` (default `~/Development`, set in the global config) for a directory of that name. A process can't change its parent shell's directory, so `slate shellenv` prints a function that does, with tab completion over project and workspace names. One line in your rc file, with the function name of your choice:
 
 ```sh
-eval "$(slate shellenv zsh)"    # ~/.zshrc, after compinit
-eval "$(slate shellenv bash)"   # ~/.bashrc
+eval "$(slate shellenv zsh --name dev)"    # ~/.zshrc, after compinit
+eval "$(slate shellenv bash --name dev)"   # ~/.bashrc
 ```
 
 Then `dev project` or `dev project@my-feature`.

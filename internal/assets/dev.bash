@@ -1,12 +1,12 @@
-unalias dev 2>/dev/null || true
-function dev {
+unalias {{NAME}} 2>/dev/null || true
+function {{NAME}} {
 	local dir
 	dir=$(slate where -- "$@") || return
 	cd -- "$dir"
 }
 
 # cobra ends its output with a :<directive> line, which only the last line is
-function _dev_candidates {
+function _slate_where_candidates {
 	local -a lines
 	local line
 	while IFS= read -r line; do lines[${#lines[@]}]=$line; done < <(slate __complete where -- "$1" 2>/dev/null </dev/null)
@@ -18,7 +18,7 @@ function _dev_candidates {
 # it count; readline replaces the text after an open quote verbatim, otherwise
 # the text after the last unquoted COMP_WORDBREAKS character (a @ or $ break
 # stays part of it), whatever COMP_WORDS says
-function _dev_complete {
+function _slate_where_complete {
 	local line n k c q word text before quoted inword argn redir
 	line="${COMP_LINE:0:$COMP_POINT}"
 	n=${#line}
@@ -92,7 +92,7 @@ function _dev_complete {
 			COMPREPLY[${#COMPREPLY[@]}]=$c ;;
 		esac
 	done <<CANDIDATES
-$(_dev_candidates "$word")
+$(_slate_where_candidates "$word")
 CANDIDATES
 }
-complete -F _dev_complete dev
+complete -F _slate_where_complete {{NAME}}
