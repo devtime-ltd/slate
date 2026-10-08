@@ -23,7 +23,11 @@ var whereCmd = &cobra.Command{
 	Long: `Prints the directory of a project, of a workspace inside it, or of the dev
 root when given nothing. A project is looked up in the registry first, then
 under the dev root as <org>/<repo>, <org>, or a bare <repo> searched across
-every org.
+every org. Failing an exact name, the project, org or workspace whose name
+starts with the given one is taken, then the one whose name contains it,
+ignoring case: "shop" reaches acme/web-shop. A name that others
+only extend past a separator wins over them, so web-shop-iac does not
+get in the way; any other tie is listed.
 
 The dev root is ` + defaultDevRoot + ` unless dev_root is set in the global config
 or SLATE_DEV_ROOT in the environment.
@@ -93,19 +97,17 @@ func resolveWhere(target, root string, registry map[string]string) (string, erro
 		}
 		return root, nil
 	}
-	if _, registered := registry[target]; registered {
-		return resolveProjectRoot(target, root, registry)
-	}
-	dir, err := resolveProjectRoot(target, root, registry)
+	dir, err := resolveProjectExactly(target, root, registry)
 	if err == nil {
 		return dir, nil
 	}
-	var notFound *notFoundError
-	var noRoot *missingRootError
-	if !errors.As(err, &notFound) && !errors.As(err, &noRoot) {
+	if !unresolved(err) {
 		return "", err
 	}
-	project, ws, _ := splitTarget(target)
+	project, ws, hasAt := splitTarget(target)
+	if !hasAt {
+		return resolveProjectRoot(target, root, registry)
+	}
 	if project == "" {
 		return "", fmt.Errorf("'%s' needs a project before the @", target)
 	}
@@ -116,16 +118,7 @@ func resolveWhere(target, root string, registry map[string]string) (string, erro
 	if ws == "" {
 		return projectRoot, nil
 	}
-	wsDir := filepath.Join(workspace.WorkspacesRootIn(projectRoot), ws)
-	if workspace.ValidateName(ws) != nil {
-		return "", fmt.Errorf("no workspace '%s' in %s", ws, project)
-	}
-	if ok, err := dirExists(wsDir); err != nil {
-		return "", err
-	} else if !ok {
-		return "", fmt.Errorf("no workspace '%s' in %s", ws, project)
-	}
-	return wsDir, nil
+	return resolveWorkspaceDir(project, ws, projectRoot)
 }
 
 // a whole target is tried as a project before this, so the last @ is the
@@ -138,14 +131,27 @@ func splitTarget(target string) (project, ws string, hasAt bool) {
 	return target[:i], target[i+1:], true
 }
 
+func unresolved(err error) bool {
+	var notFound *notFoundError
+	var noRoot *missingRootError
+	return errors.As(err, &notFound) || errors.As(err, &noRoot)
+}
+
 func resolveProjectRoot(project, root string, registry map[string]string) (string, error) {
+	dir, err := resolveProjectExactly(project, root, registry)
+	if !unresolved(err) {
+		return dir, err
+	}
+	loose, lerr := resolveProjectLoosely(project, root, registry)
+	if unresolved(lerr) {
+		return "", err
+	}
+	return loose, lerr
+}
+
+func resolveProjectExactly(project, root string, registry map[string]string) (string, error) {
 	if path, ok := registry[project]; ok {
-		if ok, err := dirExists(path); err != nil {
-			return "", err
-		} else if !ok {
-			return "", fmt.Errorf("project '%s' is registered at %s, which does not exist (see %s)", project, path, config.RegistryPath())
-		}
-		return path, nil
+		return registeredDir(project, path)
 	}
 	if ok, err := dirExists(root); err != nil {
 		return "", err
@@ -162,20 +168,17 @@ func resolveProjectRoot(project, root string, registry map[string]string) (strin
 	}
 	var hits []string
 	if !strings.Contains(project, "/") {
-		orgs, err := os.ReadDir(root)
+		orgs, err := dirNames(root)
 		if err != nil {
 			return "", err
 		}
 		for _, org := range orgs {
-			if strings.HasPrefix(org.Name(), ".") {
-				continue
-			}
-			ok, err := dirExists(filepath.Join(root, org.Name(), project))
+			ok, err := dirExists(filepath.Join(root, org, project))
 			if err != nil {
 				return "", err
 			}
 			if ok {
-				hits = append(hits, org.Name()+"/"+project)
+				hits = append(hits, org+"/"+project)
 			}
 		}
 	}
@@ -185,16 +188,176 @@ func resolveProjectRoot(project, root string, registry map[string]string) (strin
 	case 1:
 		return filepath.Join(root, hits[0]), nil
 	}
-	return "", &ambiguousError{name: project, hits: hits}
+	return "", &ambiguousError{name: project, what: "is in more than one org", hits: hits}
+}
+
+func registeredDir(name, path string) (string, error) {
+	if ok, err := dirExists(path); err != nil {
+		return "", err
+	} else if !ok {
+		return "", fmt.Errorf("project '%s' is registered at %s, which does not exist (see %s)", name, path, config.RegistryPath())
+	}
+	return path, nil
+}
+
+func resolveProjectLoosely(project, root string, registry map[string]string) (string, error) {
+	if filepath.IsAbs(project) || !withinRoot(root, project) {
+		return "", &notFoundError{name: project, root: root}
+	}
+	pool, token, err := looseCandidates(project, root, registry)
+	if err != nil {
+		return "", err
+	}
+	hits := matchLoosely(token, pool)
+	switch len(hits) {
+	case 0:
+		return "", &notFoundError{name: project, root: root}
+	case 1:
+		if hits[0].registered {
+			return registeredDir(hits[0].label, hits[0].path)
+		}
+		return hits[0].path, nil
+	}
+	return "", &ambiguousError{name: project, what: "matches more than one project", hits: labels(hits)}
+}
+
+func resolveWorkspaceDir(project, ws, projectRoot string) (string, error) {
+	wsRoot := workspace.WorkspacesRootIn(projectRoot)
+	if workspace.ValidateName(ws) == nil {
+		if ok, err := dirExists(filepath.Join(wsRoot, ws)); err != nil {
+			return "", err
+		} else if ok {
+			return filepath.Join(wsRoot, ws), nil
+		}
+	}
+	names, err := dirNames(wsRoot)
+	if err != nil {
+		return "", err
+	}
+	var pool []candidate
+	for _, name := range names {
+		pool = append(pool, candidate{label: name, key: name, path: filepath.Join(wsRoot, name)})
+	}
+	hits := matchLoosely(ws, pool)
+	switch len(hits) {
+	case 0:
+		return "", fmt.Errorf("no workspace '%s' in %s", ws, project)
+	case 1:
+		return hits[0].path, nil
+	}
+	return "", &ambiguousError{name: ws, what: "matches more than one workspace in " + project, hits: labels(hits)}
+}
+
+type candidate struct {
+	label, key, path string
+	registered       bool
+}
+
+// a registered name stands in for any repo called the same, as for an exact name
+func looseCandidates(project, root string, registry map[string]string) ([]candidate, string, error) {
+	if org, repo, scoped := strings.Cut(project, "/"); scoped {
+		if strings.Contains(repo, "/") {
+			return nil, repo, nil
+		}
+		repos, err := dirNames(filepath.Join(root, org))
+		if err != nil {
+			return nil, repo, err
+		}
+		var pool []candidate
+		for _, name := range repos {
+			pool = append(pool, candidate{label: org + "/" + name, key: name, path: filepath.Join(root, org, name)})
+		}
+		return pool, repo, nil
+	}
+	names := make([]string, 0, len(registry))
+	for name := range registry {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var pool []candidate
+	for _, name := range names {
+		pool = append(pool, candidate{label: name, key: name, path: registry[name], registered: true})
+	}
+	orgs, err := dirNames(root)
+	if err != nil {
+		return nil, project, err
+	}
+	for _, org := range orgs {
+		if _, taken := registry[org]; !taken {
+			pool = append(pool, candidate{label: org, key: org, path: filepath.Join(root, org)})
+		}
+		repos, err := dirNames(filepath.Join(root, org))
+		if err != nil {
+			return nil, project, err
+		}
+		for _, repo := range repos {
+			if _, taken := registry[repo]; taken {
+				continue
+			}
+			pool = append(pool, candidate{label: org + "/" + repo, key: repo, path: filepath.Join(root, org, repo)})
+		}
+	}
+	return pool, project, nil
+}
+
+func matchLoosely(token string, pool []candidate) []candidate {
+	token = strings.ToLower(token)
+	if token == "" {
+		return nil
+	}
+	for _, accept := range []func(string, string) bool{strings.HasPrefix, strings.Contains} {
+		var hits []candidate
+		for _, c := range pool {
+			if accept(strings.ToLower(c.key), token) {
+				hits = append(hits, c)
+			}
+		}
+		if len(hits) > 0 {
+			return withoutExtensions(hits)
+		}
+	}
+	return nil
+}
+
+// web-shop-iac extends web-shop: when both match, the base is meant
+func withoutExtensions(hits []candidate) []candidate {
+	var out []candidate
+	for _, hit := range hits {
+		extension := false
+		for _, base := range hits {
+			if extends(hit.key, base.key) {
+				extension = true
+				break
+			}
+		}
+		if !extension {
+			out = append(out, hit)
+		}
+	}
+	return out
+}
+
+func extends(name, base string) bool {
+	name, base = strings.ToLower(name), strings.ToLower(base)
+	return len(name) > len(base) && strings.HasPrefix(name, base) && strings.ContainsRune("-_.", rune(name[len(base)]))
+}
+
+func labels(hits []candidate) []string {
+	out := make([]string, len(hits))
+	for i, hit := range hits {
+		out[i] = hit.label
+	}
+	sort.Strings(out)
+	return out
 }
 
 type ambiguousError struct {
-	name string
-	hits []string
+	name, what string
+	hits       []string
 }
 
 func (e *ambiguousError) Error() string {
-	return fmt.Sprintf("'%s' is in more than one org:\n  %s", e.name, strings.Join(e.hits, "\n  "))
+	return fmt.Sprintf("'%s' %s:\n  %s", e.name, e.what, strings.Join(e.hits, "\n  "))
 }
 
 func withinRoot(root, name string) bool {
@@ -250,7 +413,12 @@ func whereCandidates(token, root string, registry map[string]string) []string {
 		}
 	}
 	if project, _, hasAt := splitTarget(token); hasAt {
-		if projectRoot, err := resolveProjectRoot(project, root, registry); err == nil {
+		projectRoot, err := resolveProjectExactly(project, root, registry)
+		// foo@ is foo@bar half-typed, not project foo with no workspace yet
+		if err != nil && !startsAny(token, seen) {
+			projectRoot, err = resolveProjectRoot(project, root, registry)
+		}
+		if err == nil {
 			for _, ws := range subdirs(workspace.WorkspacesRootIn(projectRoot)) {
 				seen[project+"@"+ws] = true
 			}
@@ -266,25 +434,43 @@ func whereCandidates(token, root string, registry map[string]string) []string {
 	return out
 }
 
+func startsAny(token string, names map[string]bool) bool {
+	for name := range names {
+		if strings.HasPrefix(name, token) {
+			return true
+		}
+	}
+	return false
+}
+
 func subdirs(dir string) []string {
+	names, _ := dirNames(dir)
+	return names
+}
+
+// dirNames lists the directories in dir, skipping hidden ones; a missing dir
+// has none, and any other failure, such as a permission error, is returned
+func dirNames(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var out []string
 	for _, e := range entries {
 		name := e.Name()
-		if strings.HasPrefix(name, ".") || !isDir(filepath.Join(dir, name)) {
+		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		out = append(out, name)
+		if ok, err := dirExists(filepath.Join(dir, name)); err != nil {
+			return nil, err
+		} else if ok {
+			out = append(out, name)
+		}
 	}
-	return out
-}
-
-func isDir(path string) bool {
-	ok, _ := dirExists(path)
-	return ok
+	return out, nil
 }
 
 // dirExists reports a missing path or a non-directory as false and any other

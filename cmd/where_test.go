@@ -20,6 +20,11 @@ func devRootFixture(t *testing.T) string {
 		"4lun/at@sign/.slate/workspaces/ws1",
 		"4lun/dup@x",
 		"devtime-ltd/dup@x",
+		"acme/web-shop/.slate/workspaces/feature-x",
+		"acme/web-shop-iac",
+		"4lun/flint-nixos",
+		"4lun/prism-nixos",
+		"4lun/nixos-machines",
 		".hidden/secret",
 	} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
@@ -41,6 +46,7 @@ func TestResolveWhere(t *testing.T) {
 	}
 	registry := map[string]string{"vesper": registered, "gone": filepath.Join(root, "nowhere"), "foo@bar": atSign}
 	sparta := filepath.Join(root, "centerframe", "sparta")
+	shop := filepath.Join(root, "acme", "web-shop")
 
 	cases := []struct {
 		target  string
@@ -56,6 +62,8 @@ func TestResolveWhere(t *testing.T) {
 		{"4lun/at@sign", filepath.Join(root, "4lun", "at@sign"), ""},
 		{"at@sign@ws1", filepath.Join(root, "4lun", "at@sign", ".slate", "workspaces", "ws1"), ""},
 		{"at@sign@nope", "", "no workspace 'nope' in at@sign"},
+		{"at@si", "", "no workspace 'si' in at"},
+		{"foo@ba", "", "no workspace 'ba' in foo"},
 		{"dup@x", "", "'dup@x' is in more than one org"},
 		{"sparta", sparta, ""},
 		{"centerframe/sparta", sparta, ""},
@@ -64,6 +72,30 @@ func TestResolveWhere(t *testing.T) {
 		{"sparta@", sparta, ""},
 		{"centerframe/sparta@bulk-invite", filepath.Join(sparta, ".slate", "workspaces", "bulk-invite"), ""},
 		{"hydra", "", "'hydra' is in more than one org"},
+		{"shop", shop, ""},
+		{"SHOP", shop, ""},
+		{"web", shop, ""},
+		{"iac", filepath.Join(root, "acme", "web-shop-iac"), ""},
+		{"acme/shop", shop, ""},
+		{"acme/WEB", shop, ""},
+		{"nixos", filepath.Join(root, "4lun", "nixos-machines"), ""},
+		{"acm", filepath.Join(root, "acme"), ""},
+		{"spar", sparta, ""},
+		{"vesp", registered, ""},
+		{"gon", "", "does not exist"},
+		{"shop@feat", filepath.Join(shop, ".slate", "workspaces", "feature-x"), ""},
+		{"shop@nope", "", "no workspace 'nope' in shop"},
+		{"sparta@red", filepath.Join(sparta, ".slate", "workspaces", "redis-cache"), ""},
+		{"sparta@B", filepath.Join(sparta, ".slate", "workspaces", "bulk-invite"), ""},
+		{"spar@red", filepath.Join(sparta, ".slate", "workspaces", "redis-cache"), ""},
+		{"sparta@e", "", "'e' matches more than one workspace in sparta"},
+		{"-nixos", "", "'-nixos' matches more than one project"},
+		{"hyd", "", "'hyd' matches more than one project"},
+		{"s", "", "'s' matches more than one project"},
+		{"notes", "", "nothing called 'notes'"},
+		{"acme/nope", "", "nothing called 'acme/nope'"},
+		{"nope/shop", "", "nothing called 'nope/shop'"},
+		{"a/b/c", "", "nothing called 'a/b/c'"},
 		{"nope", "", "nothing called 'nope'"},
 		{"centerframe/nope", "", "nothing called 'centerframe/nope'"},
 		{"notes.md", "", "nothing called 'notes.md'"},
@@ -102,8 +134,11 @@ func TestResolveWhere(t *testing.T) {
 func TestResolveWhereListsEveryOrgOfAnAmbiguousName(t *testing.T) {
 	root := devRootFixture(t)
 	for name, orgs := range map[string][]string{
-		"hydra": {"4lun/hydra", "devtime-ltd/hydra"},
-		"dup@x": {"4lun/dup@x", "devtime-ltd/dup@x"},
+		"hydra":  {"4lun/hydra", "devtime-ltd/hydra"},
+		"dup@x":  {"4lun/dup@x", "devtime-ltd/dup@x"},
+		"-nixos": {"4lun/flint-nixos", "4lun/prism-nixos"},
+		"hyd":    {"4lun/hydra", "devtime-ltd/hydra"},
+		"s":      {"centerframe/sparta", "devtime-ltd/slate"},
 	} {
 		_, err := resolveWhere(name, root, nil)
 		if err == nil {
@@ -113,6 +148,60 @@ func TestResolveWhereListsEveryOrgOfAnAmbiguousName(t *testing.T) {
 			if !strings.Contains(err.Error(), org) {
 				t.Errorf("%s: error %q does not name %s", name, err, org)
 			}
+		}
+	}
+}
+
+func TestResolveWhereLetsARegisteredNameStandInForItsRepo(t *testing.T) {
+	root := devRootFixture(t)
+	elsewhere := t.TempDir()
+	registry := map[string]string{"web-shop": elsewhere}
+	for _, target := range []string{"shop", "web"} {
+		if got, err := resolveWhere(target, root, registry); err != nil || got != elsewhere {
+			t.Errorf("%s: got %q, %v, want the registered path with no tie against acme/web-shop", target, got, err)
+		}
+	}
+}
+
+func TestResolveWhereTakesAnExactWorkspaceOverAPartialProject(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"o/foo/.slate/workspaces/bar", "o/foo@bar-tools"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tools := filepath.Join(root, "o", "foo@bar-tools")
+	for target, want := range map[string]string{
+		"foo@bar":       filepath.Join(root, "o", "foo", ".slate", "workspaces", "bar"),
+		"foo@bar-tools": tools,
+		"bar-t":         tools,
+	} {
+		if got, err := resolveWhere(target, root, nil); err != nil || got != want {
+			t.Errorf("%s: got %q, %v, want %q", target, got, err, want)
+		}
+	}
+	if got, want := whereCandidates("foo@", root, nil), []string{"foo@bar", "foo@bar-tools"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("completion: got %q, want %q", got, want)
+	}
+}
+
+func TestExtends(t *testing.T) {
+	cases := []struct {
+		name, base string
+		want       bool
+	}{
+		{"web-shop-iac", "web-shop", true},
+		{"Web-Shop-IAC", "web-shop", true},
+		{"static.0c03.com", "static", true},
+		{"a_b", "a", true},
+		{"shops", "web", false},
+		{"web", "web", false},
+		{"web", "web-shop", false},
+		{"shop-web", "web", false},
+	}
+	for _, tc := range cases {
+		if got := extends(tc.name, tc.base); got != tc.want {
+			t.Errorf("extends(%q, %q) = %v, want %v", tc.name, tc.base, got, tc.want)
 		}
 	}
 }
@@ -164,10 +253,12 @@ func TestResolveWhereWithoutADevRoot(t *testing.T) {
 	registered := t.TempDir()
 	registry := map[string]string{"vesper": registered}
 
-	if got, err := resolveWhere("vesper", root, registry); err != nil || got != registered {
-		t.Errorf("registered project: got %q, %v", got, err)
+	for _, target := range []string{"vesper", "vesp", "ESPE"} {
+		if got, err := resolveWhere(target, root, registry); err != nil || got != registered {
+			t.Errorf("%q: got %q, %v, want the registered project without a dev root", target, got, err)
+		}
 	}
-	for _, target := range []string{"", "sparta"} {
+	for _, target := range []string{"", "sparta", "org/vesp"} {
 		if _, err := resolveWhere(target, root, registry); err == nil || !strings.Contains(err.Error(), "does not exist") {
 			t.Errorf("%q: err = %v, want the missing root named", target, err)
 		}
@@ -186,7 +277,7 @@ func TestWhereCandidates(t *testing.T) {
 		token string
 		want  []string
 	}{
-		{"", []string{"4lun", "4lun/at@sign", "4lun/dup@x", "4lun/hydra", "at@sign", "centerframe", "centerframe/sparta", "devtime-ltd", "devtime-ltd/dup@x", "devtime-ltd/hydra", "devtime-ltd/slate", "dup@x", "foo@bar", "hydra", "slate", "sparta", "vesper"}},
+		{"", []string{"4lun", "4lun/at@sign", "4lun/dup@x", "4lun/flint-nixos", "4lun/hydra", "4lun/nixos-machines", "4lun/prism-nixos", "acme", "acme/web-shop", "acme/web-shop-iac", "at@sign", "centerframe", "centerframe/sparta", "devtime-ltd", "devtime-ltd/dup@x", "devtime-ltd/hydra", "devtime-ltd/slate", "dup@x", "flint-nixos", "foo@bar", "hydra", "nixos-machines", "prism-nixos", "slate", "sparta", "vesper", "web-shop", "web-shop-iac"}},
 		{"foo@", []string{"foo@bar"}},
 		{"foo@bar@", []string{"foo@bar@redis-cache"}},
 		{"at@", []string{"at@sign"}},
@@ -196,6 +287,9 @@ func TestWhereCandidates(t *testing.T) {
 		{"sparta@", []string{"sparta@bulk-invite", "sparta@redis-cache"}},
 		{"sparta@red", []string{"sparta@redis-cache"}},
 		{"centerframe/sparta@b", []string{"centerframe/sparta@bulk-invite"}},
+		{"shop@", []string{"shop@feature-x"}},
+		{"spar@red", []string{"spar@redis-cache"}},
+		{"dup@", []string{"dup@x"}},
 		{"hydra@", nil},
 		{"nope@", nil},
 		{"zzz", nil},
