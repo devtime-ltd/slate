@@ -78,7 +78,7 @@ Omit the workspace name and slate uses the one you're inside, or pops a picker o
 
 ### Jumping between projects
 
-`slate where [project[@workspace]]` prints a project's main checkout or a workspace inside it. When no registered project matches, it looks under `dev_root` (default `~/Development`, set in the global config) for a directory of that name. A process can't change its parent shell's directory, so `slate shellenv` prints a function that does, with tab completion over project and workspace names. One line in your rc file, with the function name of your choice:
+`slate where [project[@workspace]]` prints a project's main checkout or a workspace inside it. When no registered project matches, it looks under `dev_root` (default `~/Development`, set in the global config) for a directory of that name, as `<org>/<repo>`, `<org>`, or a bare `<repo>` in any org. Failing an exact name it takes the project, org or workspace whose name starts with the given one, then the one whose name contains it, ignoring case, so `dev shop` reaches `acme/web-shop`. A name that others only extend past a separator wins over them (`web-shop` over `web-shop-iac`); any other tie is listed. A process can't change its parent shell's directory, so `slate shellenv` prints a function that does, with tab completion over project and workspace names. One line in your rc file, with the function name of your choice:
 
 ```sh
 eval "$(slate shellenv zsh --name dev)"    # ~/.zshrc, after compinit
