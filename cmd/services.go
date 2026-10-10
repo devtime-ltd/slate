@@ -420,14 +420,7 @@ func buildServicePorts(env compose.Env, cfg config.ProjectConfig) proxy.ServiceP
 // workspaceURLBlock is the block form (main URL, indented sub-URLs) printed
 // by the new/up/restart success messages.
 func workspaceURLBlock(env compose.Env, hostname string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) string {
-	portFor := func(service string, containerPort int) string {
-		port, err := compose.Port(env, service, containerPort)
-		if err != nil {
-			return ""
-		}
-		return port
-	}
-	main, subs := workspaceURLs(portFor, hostname, cfg, globalCfg)
+	main, subs := workspaceURLs(composePortFor(env), hostname, cfg, globalCfg)
 	out := main
 	for _, sub := range subs {
 		out += "\n  " + sub
@@ -435,13 +428,38 @@ func workspaceURLBlock(env compose.Env, hostname string, cfg config.ProjectConfi
 	return out
 }
 
+func composePortFor(env compose.Env) func(service string, containerPort int) string {
+	return func(service string, containerPort int) string {
+		port, err := compose.Port(env, service, containerPort)
+		if err != nil {
+			return ""
+		}
+		return port
+	}
+}
+
 // workspaceURLs returns the styled main URL and unindented sub-service
 // lines (vite, mailpit, mysql, postgres); callers control placement.
 // portFor resolves a service's published host port ("" when absent) — ls
 // feeds it from one docker ps snapshot, up/restart from compose.Port.
 func workspaceURLs(portFor func(service string, containerPort int) string, hostname string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) (string, []string) {
-	main := urlStyle.Render(globalCfg.WorkspaceURL(hostname))
+	main, links := workspaceLinks(portFor, hostname, cfg, globalCfg)
 	var lines []string
+	for _, l := range links {
+		lines = append(lines, subURLLine(l.label, l.url))
+	}
+	return urlStyle.Render(main), lines
+}
+
+type serviceLink struct {
+	label, url string
+}
+
+// workspaceLinks is workspaceURLs unstyled: the main URL, then a link for
+// each service with a published port.
+func workspaceLinks(portFor func(service string, containerPort int) string, hostname string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) (string, []serviceLink) {
+	main := globalCfg.WorkspaceURL(hostname)
+	var links []serviceLink
 
 	if def := cfg.Scaffold.Inline; def != nil {
 		var subs []string
@@ -454,26 +472,26 @@ func workspaceURLs(portFor func(service string, containerPort int) string, hostn
 		for _, sub := range subs {
 			d := def.Subdomains[sub]
 			if portFor(d.Service, d.Port) != "" {
-				lines = append(lines, subURLLine(sub, globalCfg.ServiceURL(sub, hostname)))
+				links = append(links, serviceLink{sub, globalCfg.ServiceURL(sub, hostname)})
 			}
 		}
-		return main, lines
+		return main, links
 	}
 
 	if portFor("vite", cfg.VitePort) != "" {
-		lines = append(lines, subURLLine("vite", globalCfg.ServiceURL("vite", hostname)))
+		links = append(links, serviceLink{"vite", globalCfg.ServiceURL("vite", hostname)})
 	}
 	if portFor("mailpit", 8025) != "" {
-		lines = append(lines, subURLLine("mailpit", globalCfg.ServiceURL("mailpit", hostname)))
+		links = append(links, serviceLink{"mailpit", globalCfg.ServiceURL("mailpit", hostname)})
 	}
 	if mysqlPort := portFor("mysql", 3306); mysqlPort != "" {
-		lines = append(lines, subURLLine("mysql", fmt.Sprintf("%s.test:%s", hostname, mysqlPort)))
+		links = append(links, serviceLink{"mysql", fmt.Sprintf("%s.test:%s", hostname, mysqlPort)})
 	}
 	if pgPort := portFor("postgres", 5432); pgPort != "" {
-		lines = append(lines, subURLLine("postgres", fmt.Sprintf("%s.test:%s", hostname, pgPort)))
+		links = append(links, serviceLink{"postgres", fmt.Sprintf("%s.test:%s", hostname, pgPort)})
 	}
 
-	return main, lines
+	return main, links
 }
 
 func subURLLine(label, url string) string {
