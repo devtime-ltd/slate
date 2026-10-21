@@ -25,7 +25,7 @@ func (s *nextjsScaffold) FileMap(slateDir string) map[string]string {
 	return map[string]string{
 		"compose.yaml.tmpl": filepath.Join(slateDir, "compose.yaml"),
 		"Dockerfile.tmpl":   filepath.Join(slateDir, "Dockerfile"),
-		"dockerignore.tmpl": filepath.Join(slateDir, ".dockerignore"),
+		"dockerignore.tmpl": filepath.Join(slateDir, "Dockerfile.dockerignore"),
 	}
 }
 
