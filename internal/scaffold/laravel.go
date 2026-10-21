@@ -41,7 +41,7 @@ func (s *laravelScaffold) FileMap(slateDir string) map[string]string {
 		"compose.yaml.tmpl":     filepath.Join(slateDir, "compose.yaml"),
 		"Dockerfile.tmpl":       filepath.Join(slateDir, "Dockerfile"),
 		"000-default.conf.tmpl": filepath.Join(slateDir, "000-default.conf"),
-		"dockerignore.tmpl":     filepath.Join(slateDir, ".dockerignore"),
+		"dockerignore.tmpl":     filepath.Join(slateDir, "Dockerfile.dockerignore"),
 	}
 }
 

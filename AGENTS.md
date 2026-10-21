@@ -27,7 +27,7 @@ slate (Go binary)
 └── main.go
 ```
 
-**Per-project bootstrap:** just `slate.yml` (created by `slate init <scaffold>`). Docker infrastructure (compose.yaml, Dockerfile, .dockerignore) is generated at runtime into `.slate/` (gitignored) from the embedded scaffold, or from the project's committed compose file when `scaffold:` is an inline map (see README).
+**Per-project bootstrap:** just `slate.yml` (created by `slate init <scaffold>`). Docker infrastructure (compose.yaml, Dockerfile, Dockerfile.dockerignore) is generated at runtime into `.slate/` (gitignored) from the embedded scaffold, or from the project's committed compose file when `scaffold:` is an inline map (see README).
 
 **Key internal conventions:**
 - Compose project: `slate__{project}--{workspace}` (double underscore)
