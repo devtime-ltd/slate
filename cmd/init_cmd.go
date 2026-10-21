@@ -76,6 +76,7 @@ func generateSlateYml(scaffold string) string {
 # apt_packages: [ghostscript, imagemagick, libmagickwand-dev]
 # php_extensions: [imagick]
 
+# php_version: "8.4.27"   # default "8.5.12"; X.Y tracks the official image, X.Y.Z builds that release when the image lags
 # node_image: node:22   # default node:24; pin one whose npm satisfies engines.npm
 `
 	case "nextjs":

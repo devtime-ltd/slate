@@ -459,10 +459,10 @@ func applyLocalOverlay(mainRoot string, cfg ProjectConfig) (ProjectConfig, error
 // PinnedExtraKeys are the host-reaching keys that live in Extra rather than a
 // named field. Each decides what a container is or runs, so like scaffold and
 // env it must come from committed config, never the container-writable
-// worktree: files mounts host paths in, node_image picks the image, and
-// apt_packages/php_extensions/php_ini are spliced into the image's Dockerfile
-// as root build steps.
-var PinnedExtraKeys = []string{"files", "node_image", "apt_packages", "php_extensions", "php_ini"}
+// worktree: files mounts host paths in, node_image and php_version pick the
+// image, and apt_packages/php_extensions/php_ini are spliced into the image's
+// Dockerfile as root build steps.
+var PinnedExtraKeys = []string{"files", "node_image", "php_version", "apt_packages", "php_extensions", "php_ini"}
 
 // LoadProjectForWorkspace prefers the worktree's slate.yml so a branch can
 // test config changes. `project:` stays pinned to the main checkout, as do

