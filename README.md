@@ -142,7 +142,7 @@ Each workspace uses the `slate.yml` in its own worktree, so a branch can change 
 
 - `project:` always comes from the main checkout, so a branch can't change a workspace's identity.
 - `agent:`, `new:` and `up:` run on the host and only ever come from the main checkout (see [Agent](#agent)).
-- Keys that reach the host (`scaffold:`, `files:`, `database:`, `env:`, `node_image:`, `apt_packages:`, `php_extensions:`, `php_ini:`) come from **committed** content on the workspace branch, never the working copy, so a compromised dependency can't rewrite them and wait for your next `slate up`. Uncommitted edits to them get a note; commit them on the branch to test.
+- Keys that reach the host (`scaffold:`, `files:`, `database:`, `env:`, `node_image:`, `php_version:`, `apt_packages:`, `php_extensions:`, `php_ini:`) come from **committed** content on the workspace branch, never the working copy, so a compromised dependency can't rewrite them and wait for your next `slate up`. Uncommitted edits to them get a note; commit them on the branch to test.
 
 Swapping `scaffold:` usually wants `slate up --fresh`.
 
@@ -157,6 +157,7 @@ base_from_head: true # fork from the main checkout's HEAD instead
 
 apt_packages: [ghostscript, imagemagick, libmagickwand-dev]
 php_extensions: [imagick]
+php_version: "8.4.27" # default: "8.5.12"
 node_image: node:22 # default: node:24 (laravel), node:24-slim (nextjs)
 php_ini:
   memory_limit: 1024M # defaults: memory_limit=512M, upload/post 100M
@@ -174,7 +175,7 @@ files: # host files mounted into containers
   ~/.npmrc: /home/node/.npmrc
 ```
 
-Pin a `node_image` whose bundled npm satisfies your `engines.npm`, or a mismatched npm rewrites the lockfile on every start. `apt_packages`, `php_extensions` and `php_ini` build into the image, so an existing workspace picks them up on `slate up --build`.
+Pin a `node_image` whose bundled npm satisfies your `engines.npm`, or a mismatched npm rewrites the lockfile on every start. `php_version` as `X.Y` tracks the official `php:X.Y-apache` image; as `X.Y.Z` it also builds that release from php.net on top whenever the image's PHP is older, so a security release reaches workspaces before Docker Hub carries it, and the build step skips itself once it does. `php_version`, `apt_packages`, `php_extensions` and `php_ini` build into the image, so an existing workspace picks them up on `slate up --build`.
 
 Lifecycle hooks run inside the containers, with worker services paused for the duration:
 

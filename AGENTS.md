@@ -258,7 +258,7 @@ commands (debugging a half-provisioned workspace is legitimate); only a live
 or died-in-flight provision does.
 
 Related trust rule: `scaffold:`, `files:`, `database:`, `env:`, `node_image:`,
-`apt_packages:`, `php_extensions:`, and `php_ini:` (host-reaching config: they
+`php_version:`, `apt_packages:`, `php_extensions:`, and `php_ini:` (host-reaching config: they
 can mount host files, choose or define containers, interpolate into compose
 files via the `--env-file` role of .env.container, or become root build steps
 in a container's Dockerfile) resolve from the workspace branch's

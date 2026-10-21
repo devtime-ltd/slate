@@ -46,6 +46,27 @@ func (s *laravelScaffold) FileMap(slateDir string) map[string]string {
 }
 
 func (s *laravelScaffold) RenderDockerfile(content string, cfg config.ProjectConfig) (string, error) {
+	php, err := laravelPHPVersion(cfg)
+	if err != nil {
+		return "", err
+	}
+	content = strings.Replace(content, "FROM "+laravelPHPImage, "FROM "+php.image(), 1)
+	if php.release != "" {
+		sha, err := phpSourceSHA256(php.release)
+		if err != nil {
+			return "", err
+		}
+		build, err := renderPHPSourceBuild(php.release, sha)
+		if err != nil {
+			return "", err
+		}
+		content = insertAfterLine(content, "FROM "+php.image(), build)
+	}
+	// PHP 8.5 compiles OPcache in, so there is no module for phpize to build.
+	if php.atLeast(8, 5) {
+		content = strings.Replace(content, "        opcache \\\n", "", 1)
+	}
+
 	aptPkgs := cfg.StringSlice("apt_packages")
 	phpExts := cfg.StringSlice("php_extensions")
 	phpIni := cfg.StringMap("php_ini")
