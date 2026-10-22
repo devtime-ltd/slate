@@ -49,6 +49,7 @@ Tools:
   slate version                   Print the build version, commit and date
   slate brief                     Print an agent-facing cheatsheet for this project
   slate open [name]               Open workspace URL in browser
+  slate urls [name]               Print the workspace and service URLs (pipeable)
   slate path [name]               Print workspace path (pipeable, --open)
   slate pwd                       Print the project's main checkout (pipeable)
   slate cd [name]                 Spawn a sub-shell rooted at the workspace dir
