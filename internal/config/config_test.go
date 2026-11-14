@@ -166,6 +166,19 @@ func TestLoadProjectWithScaffold(t *testing.T) {
 	}
 }
 
+func TestLoadProjectStillAcceptsTheRemovedVitePortKey(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "slate.yml"), []byte("scaffold: laravel\nvite_port: 5174\n"), 0o644)
+
+	cfg, err := LoadProject(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Scaffold.Name != "laravel" {
+		t.Errorf("Scaffold = %q, want %q", cfg.Scaffold.Name, "laravel")
+	}
+}
+
 func TestLoadProjectInlineScaffold(t *testing.T) {
 	dir := t.TempDir()
 	yaml := `scaffold:
