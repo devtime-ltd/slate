@@ -3,10 +3,10 @@ package cmd
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -442,7 +442,7 @@ func composePortFor(env compose.Env) func(service string, containerPort int) str
 }
 
 // workspaceURLs returns the styled main URL and unindented sub-service
-// lines (vite, mailpit, mysql, postgres); callers control placement.
+// lines; callers control placement.
 // portFor resolves a service's published host port ("" when absent) — ls
 // feeds it from one docker ps snapshot, up/restart from compose.Port.
 func workspaceURLs(portFor func(service string, containerPort int) string, hostname string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) (string, []string) {
@@ -458,42 +458,36 @@ type serviceLink struct {
 	label, url string
 }
 
-// workspaceLinks is workspaceURLs unstyled: the main URL, then a link for
-// each service with a published port.
+// workspaceLinks is the one source of a workspace's links for every command:
+// the main URL, then each published scaffold subdomain and database, sorted
+// by label.
 func workspaceLinks(portFor func(service string, containerPort int) string, hostname string, cfg config.ProjectConfig, globalCfg config.GlobalConfig) (string, []serviceLink) {
 	main := globalCfg.WorkspaceURL(hostname)
-	var links []serviceLink
+	s, err := scaffold.Resolve(cfg)
+	if err != nil {
+		return main, nil
+	}
 
-	if def := cfg.Scaffold.Inline; def != nil {
-		var subs []string
-		for sub := range def.Subdomains {
-			if sub != "" {
-				subs = append(subs, sub)
-			}
+	byLabel := map[string]string{}
+	for sub, d := range s.Subdomains() {
+		if sub != "" && portFor(d.Service, d.Port) != "" {
+			byLabel[sub] = globalCfg.ServiceURL(sub, hostname)
 		}
-		sort.Strings(subs)
-		for _, sub := range subs {
-			d := def.Subdomains[sub]
-			if portFor(d.Service, d.Port) != "" {
-				links = append(links, serviceLink{sub, globalCfg.ServiceURL(sub, hostname)})
-			}
+	}
+	for _, tool := range s.Tools() {
+		db, ok := tool.(config.DBTool)
+		if !ok {
+			continue
 		}
-		return main, links
+		if port := portFor(db.Service, db.Port); port != "" {
+			byLabel[db.Service] = fmt.Sprintf("%s.test:%s", hostname, port)
+		}
 	}
 
-	if portFor("vite", cfg.VitePort) != "" {
-		links = append(links, serviceLink{"vite", globalCfg.ServiceURL("vite", hostname)})
+	links := make([]serviceLink, 0, len(byLabel))
+	for _, label := range slices.Sorted(maps.Keys(byLabel)) {
+		links = append(links, serviceLink{label, byLabel[label]})
 	}
-	if portFor("mailpit", 8025) != "" {
-		links = append(links, serviceLink{"mailpit", globalCfg.ServiceURL("mailpit", hostname)})
-	}
-	if mysqlPort := portFor("mysql", 3306); mysqlPort != "" {
-		links = append(links, serviceLink{"mysql", fmt.Sprintf("%s.test:%s", hostname, mysqlPort)})
-	}
-	if pgPort := portFor("postgres", 5432); pgPort != "" {
-		links = append(links, serviceLink{"postgres", fmt.Sprintf("%s.test:%s", hostname, pgPort)})
-	}
-
 	return main, links
 }
 

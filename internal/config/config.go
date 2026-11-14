@@ -64,7 +64,6 @@ type ProjectConfig struct {
 	Setup        string              `yaml:"setup"`
 	Env          map[string]string   `yaml:"env"`
 	AppPort      int                 `yaml:"app_port"`
-	VitePort     int                 `yaml:"vite_port"`
 	Tools        map[string]ExecTool `yaml:"tools"`
 	Agent        AgentCmd            `yaml:"agent"`
 	New          string              `yaml:"new"`
@@ -242,8 +241,7 @@ func DefaultGlobal() GlobalConfig {
 
 func DefaultProject() ProjectConfig {
 	return ProjectConfig{
-		AppPort:  8080,
-		VitePort: 5173,
+		AppPort: 8080,
 	}
 }
 
@@ -366,9 +364,6 @@ func LoadProject(dir string) (ProjectConfig, error) {
 	}
 	if cfg.AppPort == 0 {
 		cfg.AppPort = 8080
-	}
-	if cfg.VitePort == 0 {
-		cfg.VitePort = 5173
 	}
 	return cfg, nil
 }

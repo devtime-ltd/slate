@@ -101,6 +101,16 @@ func runningComposePorts() map[string]wsPorts {
 	return res
 }
 
+// workspaceConfig is the workspace's own config, whose committed scaffold can
+// differ from the main checkout's; mainCfg stands in when it cannot be loaded.
+func workspaceConfig(mainRoot, wsDir string, mainCfg config.ProjectConfig) config.ProjectConfig {
+	cfg, err := config.LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		return mainCfg
+	}
+	return cfg
+}
+
 // portsLookup adapts a wsPorts map to the portFor shape workspaceURLs
 // takes. Safe on nil maps.
 func portsLookup(p wsPorts) func(string, int) string {
@@ -435,7 +445,7 @@ func listAllProjects(running map[string]wsPorts, globalCfg config.GlobalConfig) 
 			if pOrb, pStatus, pHint := provisioningRow(wsDir); pOrb != "" {
 				orb, status, url, details = pOrb, pStatus, "", pHint
 			} else if isRunning {
-				_, subs := workspaceURLs(portsLookup(ports), hostname, cfg, globalCfg)
+				_, subs := workspaceURLs(portsLookup(ports), hostname, workspaceConfig(projectPath, wt.path, cfg), globalCfg)
 				details = strings.Join(subs, "\n")
 			}
 
@@ -510,7 +520,7 @@ func collectWorktrees(mainRoot string, running map[string]wsPorts, globalCfg con
 			if pOrb, pStatus, pHint := provisioningRow(wsDir); pOrb != "" {
 				orb, status, url, details = pOrb, pStatus, "", pHint
 			} else if isRunning {
-				_, subs := workspaceURLs(portsLookup(ports), hostname, cfg, globalCfg)
+				_, subs := workspaceURLs(portsLookup(ports), hostname, workspaceConfig(mainRoot, wt.path, cfg), globalCfg)
 				details = strings.Join(subs, "\n")
 			}
 		}
