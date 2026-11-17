@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestDefaultGlobal(t *testing.T) {
@@ -824,5 +826,46 @@ func TestHostExecPinnedIgnoresLocalOverlayDifferences(t *testing.T) {
 	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: laravel\nagent: evil\n"), 0o644)
 	if pinned := HostExecPinned(mainRoot, wsDir); !slices.Equal(pinned, []string{"agent"}) {
 		t.Errorf("HostExecPinned = %v, want [agent] for a real worktree edit", pinned)
+	}
+}
+
+func TestMountPaths(t *testing.T) {
+	parse := func(t *testing.T, src string) ProjectConfig {
+		t.Helper()
+		var cfg ProjectConfig
+		if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+
+	ro, rw, disabled, err := parse(t, "readonly: [.idea/]\nwritable: [.slate/tmp/]\n").MountPaths()
+	if err != nil || disabled || !slices.Equal(ro, []string{".idea/"}) || !slices.Equal(rw, []string{".slate/tmp/"}) {
+		t.Errorf("got ro=%v rw=%v disabled=%v err=%v", ro, rw, disabled, err)
+	}
+	if _, _, disabled, err := parse(t, "readonly: false\n").MountPaths(); err != nil || !disabled {
+		t.Errorf("readonly: false should disable, got disabled=%v err=%v", disabled, err)
+	}
+	for _, bad := range []string{"readonly: true\n", "readonly: .idea\n", "writable: [1]\n"} {
+		if _, _, _, err := parse(t, bad).MountPaths(); err == nil {
+			t.Errorf("%q should be rejected", bad)
+		}
+	}
+}
+
+func TestTrustPinnedCoversMountPaths(t *testing.T) {
+	mainRoot, wsDir := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(mainRoot, "slate.yml"), []byte("scaffold: nextjs\n"), 0o644)
+	os.WriteFile(filepath.Join(wsDir, "slate.yml"), []byte("scaffold: nextjs\nreadonly: false\nwritable: [.slate/]\n"), 0o644)
+
+	cfg, err := LoadProjectForWorkspace(mainRoot, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, rw, disabled, _ := cfg.MountPaths(); disabled || rw != nil {
+		t.Errorf("a worktree edit must not change the mounts, got disabled=%v writable=%v", disabled, rw)
+	}
+	if pinned := TrustPinned(mainRoot, wsDir); !slices.Equal(pinned, []string{"readonly", "writable"}) {
+		t.Errorf("TrustPinned = %v, want [readonly writable]", pinned)
 	}
 }

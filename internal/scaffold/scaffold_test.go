@@ -542,6 +542,8 @@ func (nullScaffold) DefaultEnv(string, config.GlobalConfig) map[string]string { 
 func (nullScaffold) Tools() map[string]config.Tool                            { return nil }
 func (nullScaffold) Subdomains() map[string]Subdomain                         { return nil }
 func (nullScaffold) AppLikeServices() []string                                { return []string{"app", "queue"} }
+func (nullScaffold) ReadOnlyPaths() []string                                  { return nil }
+func (nullScaffold) WritablePaths() []string                                  { return nil }
 
 type appOnlyScaffold struct{ nullScaffold }
 

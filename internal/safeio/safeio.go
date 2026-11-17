@@ -281,6 +281,56 @@ func MkdirAt(dir *os.File, name string, perm os.FileMode) error {
 	return unix.Mkdirat(int(dir.Fd()), name, uint32(perm))
 }
 
+// EnsurePathAt makes rel, a slash-separated path under dir, exist: missing
+// directories along it are created, and a missing leaf becomes an empty
+// directory (isDir) or an empty regular file. A symlink at any component,
+// leaf included, is refused rather than followed.
+func EnsurePathAt(dir *os.File, rel string, isDir bool) error {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	parent := dir
+	defer func() {
+		if parent != dir {
+			parent.Close()
+		}
+	}()
+	for _, name := range parts[:len(parts)-1] {
+		if err := MkdirAt(parent, name, 0o755); err != nil && err != unix.EEXIST {
+			return err
+		}
+		next, err := OpenDirAt(parent, name)
+		if err != nil {
+			return fmt.Errorf("%s: %w (a symlink here is refused)", name, err)
+		}
+		if parent != dir {
+			parent.Close()
+		}
+		parent = next
+	}
+
+	leaf := parts[len(parts)-1]
+	if err := checkLeaf(leaf); err != nil {
+		return err
+	}
+	var st unix.Stat_t
+	err := unix.Fstatat(int(parent.Fd()), leaf, &st, unix.AT_SYMLINK_NOFOLLOW)
+	switch {
+	case err == nil && st.Mode&unix.S_IFMT == unix.S_IFLNK:
+		return fmt.Errorf("%s is a symlink; refusing to follow it", rel)
+	case err == nil:
+		return nil
+	case err != unix.ENOENT:
+		return err
+	case isDir:
+		return MkdirAt(parent, leaf, 0o755)
+	}
+	fd, err := unix.Openat(int(parent.Fd()), leaf,
+		unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o644)
+	if err != nil {
+		return err
+	}
+	return unix.Close(fd)
+}
+
 // RemoveAllAt removes name under dir and, if it is a directory, everything
 // inside it, entirely through *at syscalls. It never follows a symlink (at name
 // or within), so a container swapping a component for a link can't redirect the

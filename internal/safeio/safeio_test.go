@@ -360,3 +360,61 @@ func TestReplaceFileAtOwnsItsSibling(t *testing.T) {
 		t.Errorf("the planted FIFO should be untouched, got %v %v", info, err)
 	}
 }
+
+func TestEnsurePathAtCreatesMissingPieces(t *testing.T) {
+	root := t.TempDir()
+	dir, err := OpenDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+
+	if err := EnsurePathAt(dir, "a/b/cache", true); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(root, "a/b/cache")); err != nil || !info.IsDir() {
+		t.Errorf("expected a directory at a/b/cache (err=%v)", err)
+	}
+	if err := EnsurePathAt(dir, "a/stub", false); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(root, "a/stub")); err != nil || !info.Mode().IsRegular() || info.Size() != 0 {
+		t.Errorf("expected an empty file at a/stub (err=%v)", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "kept"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsurePathAt(dir, "kept", false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "kept")); string(got) != "keep" {
+		t.Errorf("existing file changed: %q", got)
+	}
+}
+
+func TestEnsurePathAtRefusesSymlinks(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	dir, err := OpenDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+
+	if err := os.Symlink(outside, filepath.Join(root, "leaf")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "mid")); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsurePathAt(dir, "leaf", true); err == nil {
+		t.Error("a symlinked leaf must be refused")
+	}
+	if err := EnsurePathAt(dir, "mid/cache", true); err == nil {
+		t.Error("a symlinked parent must be refused")
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Errorf("created %d entries outside the tree", len(entries))
+	}
+}

@@ -169,6 +169,10 @@ func (s *laravelScaffold) Subdomains() map[string]Subdomain {
 }
 
 func (s *laravelScaffold) AppLikeServices() []string { return []string{"app", "queue"} }
+func (s *laravelScaffold) ReadOnlyPaths() []string   { return nil }
+func (s *laravelScaffold) WritablePaths() []string {
+	return []string{".slate/composer/", ".slate/npm-cache/"}
+}
 
 func (s *laravelScaffold) Tools() map[string]config.Tool {
 	return map[string]config.Tool{

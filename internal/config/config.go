@@ -87,6 +87,8 @@ type InlineScaffold struct {
 	Compose    string                 `yaml:"compose"`
 	Subdomains map[string]ServicePort `yaml:"subdomains"`
 	Vars       map[string]any         `yaml:"vars"`
+	ReadOnly   []string               `yaml:"readonly"`
+	Writable   []string               `yaml:"writable"`
 }
 
 type ServicePort struct {
@@ -228,6 +230,43 @@ func (c ProjectConfig) StringSlice(key string) []string {
 	default:
 		return nil
 	}
+}
+
+// MountPaths reads the readonly: and writable: lists. readonly: false
+// switches read-only mounts off for the project (disabled).
+func (c ProjectConfig) MountPaths() (readonly, writable []string, disabled bool, err error) {
+	if v, ok := c.Extra["readonly"]; ok && v != nil {
+		if b, isBool := v.(bool); isBool {
+			if b {
+				return nil, nil, false, fmt.Errorf("readonly: expected a list of paths or false")
+			}
+			disabled = true
+		} else if readonly, err = pathList("readonly", v); err != nil {
+			return nil, nil, false, err
+		}
+	}
+	if v, ok := c.Extra["writable"]; ok && v != nil {
+		if writable, err = pathList("writable", v); err != nil {
+			return nil, nil, false, err
+		}
+	}
+	return readonly, writable, disabled, nil
+}
+
+func pathList(key string, v any) ([]string, error) {
+	items, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected a list of paths", key)
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		s, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s: expected a list of paths, got %v", key, item)
+		}
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 func DefaultGlobal() GlobalConfig {
@@ -456,8 +495,9 @@ func applyLocalOverlay(mainRoot string, cfg ProjectConfig) (ProjectConfig, error
 // env it must come from committed config, never the container-writable
 // worktree: files mounts host paths in, node_image and php_version pick the
 // image, and apt_packages/php_extensions/php_ini are spliced into the image's
-// Dockerfile as root build steps.
-var PinnedExtraKeys = []string{"files", "node_image", "php_version", "apt_packages", "php_extensions", "php_ini"}
+// Dockerfile as root build steps; readonly and writable decide what a container
+// may write that the host later trusts.
+var PinnedExtraKeys = []string{"files", "node_image", "php_version", "apt_packages", "php_extensions", "php_ini", "readonly", "writable"}
 
 // LoadProjectForWorkspace prefers the worktree's slate.yml so a branch can
 // test config changes. `project:` stays pinned to the main checkout, as do

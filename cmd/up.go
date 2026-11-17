@@ -99,10 +99,8 @@ func runUp(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if s, err := scaffold.Resolve(cfg); err == nil {
-		if err := scaffold.GenerateFileMounts(wsDir, cfg, s, appLikeServices(env, cfg)); err != nil {
-			return fmt.Errorf("generating file mounts: %w", err)
-		}
+	if err := generateMountOverrides(env, wsDir, cfg); err != nil {
+		return err
 	}
 
 	// A changed Dockerfile (node_image on nextjs, php_version, apt_packages, php_extensions,

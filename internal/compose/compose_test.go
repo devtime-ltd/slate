@@ -39,3 +39,21 @@ func TestAppLikeFromConfigJSONInvalid(t *testing.T) {
 		t.Error("invalid JSON should error")
 	}
 }
+
+func TestWorktreeBindsFromConfigJSON(t *testing.T) {
+	data := []byte(`{"services": {
+		"app":     {"volumes": [{"type": "bind", "source": "/ws", "target": "/app"}]},
+		"vite":    {"volumes": [{"type": "bind", "source": "/ws/", "target": "/srv"}]},
+		"other":   {"volumes": [{"type": "bind", "source": "/elsewhere", "target": "/app"}]},
+		"mysql":   {"volumes": [{"type": "volume", "source": "data", "target": "/var/lib/mysql"}]},
+		"mailpit": {}
+	}}`)
+
+	got, err := worktreeBindsFromConfigJSON(data, "/ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got["app"] != "/app" || got["vite"] != "/srv" {
+		t.Errorf("got %v, want app=/app and vite=/srv only", got)
+	}
+}

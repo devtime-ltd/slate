@@ -28,6 +28,10 @@ type Scaffold interface {
 	// primary; /app/* file mounts go on it alone (others would race). nil
 	// means derive from the rendered compose file (inline scaffolds).
 	AppLikeServices() []string
+	// ReadOnlyPaths and WritablePaths add to slate's read-only defaults; see
+	// ResolveMountPaths. Trailing "/" marks a directory.
+	ReadOnlyPaths() []string
+	WritablePaths() []string
 }
 
 // embeddedScaffold adds the go:embed generation half only built-ins have.

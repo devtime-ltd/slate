@@ -40,6 +40,9 @@ func buildComposeCmd(env Env, interactive, withOverride bool, args ...string) *e
 	if _, err := os.Stat(filesOverride); withOverride && err == nil {
 		cmdArgs = append(cmdArgs, "-f", filesOverride)
 	}
+	if mountsOverride := scaffold.MountsOverridePath(env.WorkspaceDir); withOverride && fileStatOK(mountsOverride) {
+		cmdArgs = append(cmdArgs, "-f", mountsOverride)
+	}
 	// only when present: down/rm must work on half-provisioned workspaces
 	if envFile := filepath.Join(env.WorkspaceDir, ".env.container"); fileStatOK(envFile) {
 		cmdArgs = append(cmdArgs, "--env-file", envFile)
@@ -113,6 +116,54 @@ func ExecPiped(env Env, service string, command ...string) error {
 // Base compose file only: a stale compose.files.yaml from a previous run could
 // break config before GenerateFileMounts regenerates it.
 func AppLikeServices(env Env) ([]string, error) {
+	out, err := resolvedConfig(env)
+	if err != nil {
+		return nil, err
+	}
+	return appLikeFromConfigJSON(out)
+}
+
+// WorktreeBinds maps each service that bind-mounts the worktree to that
+// bind's container target, from the base compose file like AppLikeServices.
+// No compose file (an inline scaffold without one) means no services.
+func WorktreeBinds(env Env) (map[string]string, error) {
+	if !fileStatOK(scaffold.ComposeFilePath(env.WorkspaceDir)) {
+		return nil, nil
+	}
+	out, err := resolvedConfig(env)
+	if err != nil {
+		return nil, err
+	}
+	return worktreeBindsFromConfigJSON(out, env.WorkspaceDir)
+}
+
+func worktreeBindsFromConfigJSON(data []byte, workspaceDir string) (map[string]string, error) {
+	var doc struct {
+		Services map[string]struct {
+			Volumes []struct {
+				Type   string `json:"type"`
+				Source string `json:"source"`
+				Target string `json:"target"`
+			} `json:"volumes"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("parsing compose config: %w", err)
+	}
+	want := filepath.Clean(workspaceDir)
+	binds := map[string]string{}
+	for name, svc := range doc.Services {
+		for _, v := range svc.Volumes {
+			if v.Type == "bind" && filepath.Clean(v.Source) == want {
+				binds[name] = v.Target
+				break
+			}
+		}
+	}
+	return binds, nil
+}
+
+func resolvedConfig(env Env) ([]byte, error) {
 	cmd := buildComposeCmd(env, false, false, "config", "--format", "json")
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -124,7 +175,7 @@ func AppLikeServices(env Env) ([]string, error) {
 		}
 		return nil, fmt.Errorf("resolving compose config: %w", err)
 	}
-	return appLikeFromConfigJSON(out)
+	return out, nil
 }
 
 func appLikeFromConfigJSON(data []byte) ([]string, error) {
