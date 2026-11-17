@@ -50,6 +50,8 @@ func (s *nextjsScaffold) Subdomains() map[string]Subdomain {
 }
 
 func (s *nextjsScaffold) AppLikeServices() []string { return []string{"app"} }
+func (s *nextjsScaffold) ReadOnlyPaths() []string   { return nil }
+func (s *nextjsScaffold) WritablePaths() []string   { return []string{".slate/npm-cache/"} }
 
 func (s *nextjsScaffold) Tools() map[string]config.Tool {
 	return map[string]config.Tool{

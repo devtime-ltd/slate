@@ -262,10 +262,8 @@ func createWorkspace(name, branch string, spec baseSpec, bg, cd, adopt, bare boo
 	if err != nil {
 		return err
 	}
-	if s, err := scaffold.Resolve(cfg); err == nil {
-		if err := scaffold.GenerateFileMounts(wsDir, cfg, s, appLikeServices(env, cfg)); err != nil {
-			return fmt.Errorf("generating file mounts: %w", err)
-		}
+	if err := generateMountOverrides(env, wsDir, cfg); err != nil {
+		return err
 	}
 
 	opts := provisionOpts{fresh: true, build: true}

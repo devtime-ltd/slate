@@ -143,7 +143,7 @@ Each workspace uses the `slate.yml` in its own worktree, so a branch can change 
 
 - `project:` always comes from the main checkout, so a branch can't change a workspace's identity.
 - `agent:`, `new:` and `up:` run on the host and only ever come from the main checkout (see [Agent](#agent)).
-- Keys that reach the host (`scaffold:`, `files:`, `database:`, `env:`, `node_image:`, `php_version:`, `apt_packages:`, `php_extensions:`, `php_ini:`) come from **committed** content on the workspace branch, never the working copy, so a compromised dependency can't rewrite them and wait for your next `slate up`. Uncommitted edits to them get a note; commit them on the branch to test.
+- Keys that reach the host (`scaffold:`, `files:`, `database:`, `env:`, `node_image:`, `php_version:`, `apt_packages:`, `php_extensions:`, `php_ini:`, `readonly:`, `writable:`) come from **committed** content on the workspace branch, never the working copy, so a compromised dependency can't rewrite them and wait for your next `slate up`. Uncommitted edits to them get a note; commit them on the branch to test.
 
 Swapping `scaffold:` usually wants `slate up --fresh`.
 
@@ -185,6 +185,21 @@ Lifecycle hooks run inside the containers, with worker services paused for the d
 - `{{SCAFFOLD_DEFAULT}}` injects the scaffold's default script at that point. A `retry <cmd>` helper (3 attempts) wraps flaky network steps.
 
 Placeholders, expanded at workspace creation: `{{GEN_PASSWORD:salt}}` derives a per-workspace password from your installation's secret key; `{{DB_NAME:label}}` gives a safe database name.
+
+### Read-only paths
+
+Containers mount the worktree read-write at `/app`, but anything the host later trusts is mounted read-only over it: `.slate/` (the generated compose files, file-mount copies, markers and logs) and `.env.container`. Each scaffold reopens the caches its containers write (`.slate/composer/` and `.slate/npm-cache/` on Laravel, `.slate/npm-cache/` on Next.js). The mounts apply to every service that binds the worktree.
+
+```yaml
+readonly: [.claude/, .vscode/] # added to the defaults
+writable: [.slate/my-cache/] # reopened inside a read-only path
+```
+
+- A trailing `/` marks a directory. Missing paths are created (an empty directory or file) before mounting.
+- The most specific path wins. On the identical path, `slate.yml` beats the scaffold, which beats the defaults, so `writable: [.env.container]` removes a default.
+- `readonly:` paths must be top-level, or sit inside another read-only path: a container could swap the directories above anything deeper.
+- A symlink at a mounted path, or above one, fails `slate up` rather than being followed, since Docker would follow it to the host.
+- `readonly: false` turns read-only mounts off for the project.
 
 ### Custom tools
 
@@ -267,7 +282,7 @@ scaffold:
     warden: { service: warden, port: 8080 } # warden.<project>--<ws>.test
 ```
 
-`compose` is a committed, project-relative compose file (read from committed content, like the other host-reaching keys). Follow the built-in scaffolds' conventions: bind-mount the worktree as `..:/app`, publish ports without host numbers (`ports: ["8081"]`), and optionally mount `${SLATE_ENTRYPOINT}` as the entrypoint for UID mapping. `${MAIN_ROOT}`, `${APP_UID}` and `${APP_GID}` interpolate. `subdomains` declares the HTTPS routes, with `"@"` as the main hostname. `setup:`, `fresh:`, `tools:`, `env:` and `files:` work as usual; inline scaffolds have no default hooks. Services that bind-mount `/app` are treated like the built-ins' app services: the first is the primary, the rest are paused while the lifecycle runs.
+`compose` is a committed, project-relative compose file (read from committed content, like the other host-reaching keys). Follow the built-in scaffolds' conventions: bind-mount the worktree as `..:/app`, publish ports without host numbers (`ports: ["8081"]`), and optionally mount `${SLATE_ENTRYPOINT}` as the entrypoint for UID mapping. `${MAIN_ROOT}`, `${APP_UID}` and `${APP_GID}` interpolate. `subdomains` declares the HTTPS routes, with `"@"` as the main hostname. `readonly` and `writable` lists here declare the scaffold's own [read-only paths](#read-only-paths), such as its caches. `setup:`, `fresh:`, `tools:`, `env:` and `files:` work as usual; inline scaffolds have no default hooks. Services that bind-mount `/app` are treated like the built-ins' app services: the first is the primary, the rest are paused while the lifecycle runs.
 
 A compose file named `*.tmpl` runs through Go's text/template with `vars:` as input (`.Project`, `.Workspace`, `.Hostname`, `.HasMainEnv`, `.Database`, `.Vars`). Reach for it only for structural differences, such as conditionally including a service.
 

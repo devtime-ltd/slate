@@ -381,6 +381,35 @@ func warnOnWorkerStart(err error) {
 	}
 }
 
+// generateMountOverrides regenerates the compose overrides that carry the
+// file mounts and the read-only mounts over the worktree.
+func generateMountOverrides(env compose.Env, wsDir string, cfg config.ProjectConfig) error {
+	s, err := scaffold.Resolve(cfg)
+	if err != nil {
+		return nil
+	}
+	if err := scaffold.GenerateFileMounts(wsDir, cfg, s, appLikeServices(env, cfg)); err != nil {
+		return fmt.Errorf("generating file mounts: %w", err)
+	}
+	mounts, warnings, err := scaffold.ResolveMountPaths(cfg, s)
+	if err != nil {
+		return fmt.Errorf("read-only mounts: %w", err)
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "  warning: %s\n", w)
+	}
+	var binds map[string]string
+	if len(mounts) > 0 {
+		if binds, err = compose.WorktreeBinds(env); err != nil {
+			return fmt.Errorf("finding the services that mount the worktree: %w", err)
+		}
+	}
+	if err := scaffold.GenerateReadOnlyMounts(wsDir, mounts, binds); err != nil {
+		return fmt.Errorf("generating read-only mounts: %w", err)
+	}
+	return nil
+}
+
 // appLikeServices: static for built-in scaffolds, compose-derived for inline
 // ones (signalled by a nil AppLikeServices).
 func appLikeServices(env compose.Env, cfg config.ProjectConfig) []string {

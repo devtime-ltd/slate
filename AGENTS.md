@@ -271,6 +271,7 @@ checkout. The worktree's working copy is never trusted for them
 
 When adding a new scaffold, implement every method on `internal/scaffold.Scaffold` plus the generation half (`FS`/`FileMap`/`RenderDockerfile`, the unexported `embeddedScaffold` interface). The non-obvious one:
 
+- **`ReadOnlyPaths()`/`WritablePaths()`** add to `scaffold.DefaultReadOnlyPaths` (`.slate/`, `.env.container`). A cache the containers write under `.slate/` must be listed as writable, or it lands on a read-only mount. Resolution and the override (`.slate/compose.mounts.yaml`, applied to every service whose bind source is the worktree, found through `compose.WorktreeBinds`, not `AppLikeServices`) live in `internal/scaffold/mounts.go`.
 - **`AppLikeServices() []string`** lists compose services that share the `/app` bind (the workspace dir bind-mounted into the container). First entry is the primary; `GenerateFileMounts` puts `/app/*` file mount targets on it alone and shared (non-`/app`) mounts on every listed service. Laravel returns `["app", "queue"]`, nextjs returns `["app"]`. nil is reserved for inline scaffolds and means "derive from the rendered compose file" (`compose.AppLikeServices`); built-ins must return a non-empty list.
 
 ## File mount handling

@@ -19,6 +19,8 @@ func (s *inlineScaffold) Name() string                    { return "inline" }
 func (s *inlineScaffold) DefaultFiles() map[string]string { return nil }
 func (s *inlineScaffold) Tools() map[string]config.Tool   { return nil }
 func (s *inlineScaffold) AppLikeServices() []string       { return nil }
+func (s *inlineScaffold) ReadOnlyPaths() []string         { return s.def.ReadOnly }
+func (s *inlineScaffold) WritablePaths() []string         { return s.def.Writable }
 
 func (s *inlineScaffold) DefaultEnv(hostname string, globalCfg config.GlobalConfig) map[string]string {
 	return nil
