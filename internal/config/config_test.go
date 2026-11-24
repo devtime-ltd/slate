@@ -4,9 +4,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestDefaultGlobal(t *testing.T) {
@@ -436,24 +439,138 @@ setup: |
 	}
 }
 
-func TestResolvedToolsOverride(t *testing.T) {
-	cfg := ProjectConfig{
-		Scaffold: ScaffoldRef{Name: "laravel"},
-		Tools: map[string]ExecTool{
-			"mycommand": {Service: "app", Command: []string{"php", "script.php"}},
-		},
+func TestResolvedToolsAddToTheScaffolds(t *testing.T) {
+	scaffoldTools := map[string]Tool{
+		"composer": ExecTool{Service: "app", Command: []string{"composer"}},
+		"mysql":    DBTool{Service: "mysql"},
 	}
-	tools := cfg.ResolvedTools()
-	if _, ok := tools["mycommand"]; !ok {
-		t.Error("custom tool should be present")
+	cfg := ProjectConfig{Tools: map[string]ExecTool{
+		"composer": {Service: "app", Command: []string{"php", "composer.phar"}},
+		"typegen":  {Steps: []ExecStep{{Service: "app", Command: []string{"./typegen-php.sh"}}}},
+	}}
+
+	tools := cfg.ResolvedTools(scaffoldTools)
+
+	if _, ok := tools["mysql"].(DBTool); !ok {
+		t.Errorf("scaffold tool mysql should survive a project tools block, got %#v", tools["mysql"])
+	}
+	if _, ok := tools["typegen"]; !ok {
+		t.Error("project tool typegen should be present")
+	}
+	composer, _ := tools["composer"].(ExecTool)
+	if !slices.Equal(composer.Command, []string{"php", "composer.phar"}) {
+		t.Errorf("project tool should replace the scaffold tool of the same name, got %v", composer.Command)
+	}
+	if len(scaffoldTools) != 2 {
+		t.Errorf("the scaffold's own map must not be written to, got %v", scaffoldTools)
 	}
 }
 
-func TestResolvedToolsEmpty(t *testing.T) {
-	cfg := ProjectConfig{Scaffold: ScaffoldRef{Name: "laravel"}}
-	tools := cfg.ResolvedTools()
-	if tools != nil {
-		t.Errorf("ResolvedTools without override should return nil, got %v", tools)
+func TestResolvedToolsWithoutAProjectBlock(t *testing.T) {
+	cfg := ProjectConfig{}
+	tools := cfg.ResolvedTools(map[string]Tool{"npm": ExecTool{Service: "app", Command: []string{"npm"}}})
+	if len(tools) != 1 || tools["npm"] == nil {
+		t.Errorf("expected the scaffold tools unchanged, got %v", tools)
+	}
+}
+
+func TestToolStepsParse(t *testing.T) {
+	var cfg ProjectConfig
+	err := yaml.Unmarshal([]byte(`
+tools:
+  typegen:
+    steps:
+      - service: app
+        command: [./typegen-php.sh]
+      - service: vite
+        command: [npm, run, "sanity:manifest:extract"]
+        args: true
+  mycommand:
+    service: app
+    command: [php, my-script.php]
+`), &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typegen := cfg.Tools["typegen"]
+	if err := typegen.Validate(); err != nil {
+		t.Fatalf("typegen should validate: %v", err)
+	}
+	want := []ExecStep{
+		{Service: "app", Command: []string{"./typegen-php.sh"}},
+		{Service: "vite", Command: []string{"npm", "run", "sanity:manifest:extract"}, Args: true},
+	}
+	if !reflect.DeepEqual(typegen.Steps, want) {
+		t.Errorf("steps = %#v, want %#v", typegen.Steps, want)
+	}
+	if got := typegen.Services(); !slices.Equal(got, []string{"app", "vite"}) {
+		t.Errorf("Services() = %v", got)
+	}
+	if err := cfg.Tools["mycommand"].Validate(); err != nil {
+		t.Errorf("single-command form should still validate: %v", err)
+	}
+}
+
+func TestExecToolValidate(t *testing.T) {
+	step := ExecStep{Service: "app", Command: []string{"true"}}
+	cases := map[string]struct {
+		tool    ExecTool
+		wantErr string
+	}{
+		"single":             {ExecTool{Service: "app", Command: []string{"php"}}, ""},
+		"steps":              {ExecTool{Steps: []ExecStep{step, step}}, ""},
+		"neither":            {ExecTool{}, "needs a service"},
+		"steps with service": {ExecTool{Service: "app", Steps: []ExecStep{step}}, "use one form"},
+		"steps with command": {ExecTool{Command: []string{"php"}, Steps: []ExecStep{step}}, "use one form"},
+		"step no service":    {ExecTool{Steps: []ExecStep{step, {Command: []string{"true"}}}}, "step 2 needs"},
+		"step no command":    {ExecTool{Steps: []ExecStep{{Service: "app"}}}, "step 1 needs"},
+	}
+	for name, tc := range cases {
+		err := tc.tool.Validate()
+		switch {
+		case tc.wantErr == "" && err != nil:
+			t.Errorf("%s: unexpected error %v", name, err)
+		case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+			t.Errorf("%s: error = %v, want it to mention %q", name, err, tc.wantErr)
+		}
+	}
+}
+
+func TestExecToolPlan(t *testing.T) {
+	single := ExecTool{Service: "app", Command: []string{"php", "artisan"}}
+	plan, err := single.Plan([]string{"migrate", "--force"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []ExecStep{{Service: "app", Command: []string{"php", "artisan", "migrate", "--force"}}}; !reflect.DeepEqual(plan, want) {
+		t.Errorf("single plan = %#v, want %#v", plan, want)
+	}
+
+	steps := ExecTool{Steps: []ExecStep{
+		{Service: "app", Command: []string{"./typegen-php.sh"}},
+		{Service: "vite", Command: []string{"npm", "run", "extract"}, Args: true},
+	}}
+	plan, err = steps.Plan([]string{"--", "--verbose"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ExecStep{
+		{Service: "app", Command: []string{"./typegen-php.sh"}},
+		{Service: "vite", Command: []string{"npm", "run", "extract", "--", "--verbose"}},
+	}
+	if !reflect.DeepEqual(plan, want) {
+		t.Errorf("steps plan = %#v, want %#v", plan, want)
+	}
+	if len(steps.Steps[1].Command) != 3 {
+		t.Errorf("Plan must not grow the tool's own command, got %v", steps.Steps[1].Command)
+	}
+
+	noArgs := ExecTool{Steps: []ExecStep{{Service: "app", Command: []string{"true"}}}}
+	if _, err := noArgs.Plan(nil); err != nil {
+		t.Errorf("a plan without arguments should resolve: %v", err)
+	}
+	if _, err := noArgs.Plan([]string{"--verbose"}); err == nil || !strings.Contains(err.Error(), "args: true") {
+		t.Errorf("arguments with no opted-in step should be refused, got %v", err)
 	}
 }
 

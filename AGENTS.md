@@ -71,7 +71,9 @@ The Scaffold interface exposes a `Tools() map[string]config.Tool` method. `Tool`
 - **`ExecTool{Service, Command}`**: runs a command inside a container (composer, artisan, npm, etc.)
 - **`DBTool{Service, Port, Scheme, User, PasswordSalt}`**: generates a DB connection URL (mysql, psql, etc.) with `--open` and `--url` flags
 
-User-defined tools in `slate.yml` are always exec tools. Scaffolds can mix both.
+User-defined tools in `slate.yml` are always exec tools. Scaffolds can mix both. `ProjectConfig.ResolvedTools` layers the project's `tools:` over the scaffold's, same name wins.
+
+An exec tool is either the single `service` + `command` form or a `steps:` list (`ExecStep`), never both (`ExecTool.Validate`, reported when the tool runs so a bad entry still shows up as a command). `ExecTool.Plan` resolves an invocation: CLI args append to the single command, or to each step with `args: true`, and are refused when no step opts in. `runExecPlan` (cmd/exec.go) runs the plan in order and stops at the first failure.
 
 ## Agent (`agent:`) + new/up hooks (`new:`/`up:`)
 
