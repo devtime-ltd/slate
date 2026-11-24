@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/devtime-ltd/slate/internal/config"
-	"github.com/devtime-ltd/slate/internal/scaffold"
 	"github.com/devtime-ltd/slate/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -105,14 +104,7 @@ func briefText(cfg config.ProjectConfig) string {
 		"- A workspace may still be provisioning in the background right after creation (`SLATE_PROVISIONING=1` in this session's env means it started that way). `slate exec` and the tool shortcuts wait for it automatically; run `slate wait` to block until it's ready explicitly (instant when already up, non-zero exit + log tail if provisioning failed).\n")
 
 	var toolNames []string
-	tools := map[string]config.Tool{}
-	if s, err := scaffold.Resolve(cfg); err == nil {
-		tools = s.Tools()
-	}
-	if userTools := cfg.ResolvedTools(); userTools != nil {
-		tools = userTools
-	}
-	for name := range tools {
+	for name := range resolvedTools(cfg) {
 		toolNames = append(toolNames, name)
 	}
 	sort.Strings(toolNames)

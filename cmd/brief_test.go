@@ -16,6 +16,20 @@ func TestBriefTextLaravel(t *testing.T) {
 	}
 }
 
+func TestBriefListsProjectToolsBesideTheScaffolds(t *testing.T) {
+	out := briefText(config.ProjectConfig{
+		Scaffold: config.ScaffoldRef{Name: "laravel"},
+		Tools: map[string]config.ExecTool{
+			"typegen": {Steps: []config.ExecStep{{Service: "app", Command: []string{"./typegen-php.sh"}}}},
+		},
+	})
+	for _, want := range []string{"`slate typegen`", "`slate artisan`", "`slate mysql`"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("brief missing %s:\n%s", want, out)
+		}
+	}
+}
+
 func TestBriefTextNoScaffold(t *testing.T) {
 	out := briefText(config.ProjectConfig{})
 	if strings.Contains(out, "phpunit") {

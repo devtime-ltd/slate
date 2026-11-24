@@ -197,6 +197,22 @@ tools:
     command: [php, my-script.php]
 ```
 
+Your tools add to the scaffold's; one with the same name as a scaffold tool replaces it. Arguments after the tool name are appended to the command (`slate mycommand --dry-run`).
+
+A tool that needs more than one container lists `steps:` instead, each with its own `service` and `command`. They run in order and stop at the first failure:
+
+```yaml
+tools:
+  typegen:
+    steps:
+      - service: app
+        command: [./typegen-php.sh]
+      - service: vite
+        command: [npm, run, "sanity:manifest:extract"]
+```
+
+Arguments go only to the steps that set `args: true`; passing arguments to a tool with no such step is an error.
+
 ## Agent
 
 At an interactive terminal, `slate new` and `slate up` drop you into the workspace through two hooks: `new:` fires straight after the worktree exists, with provisioning forked to the background behind it; `up:` fires once provisioning finishes. `agent:` is the command `slate agent [name]` runs; point the hooks at it to land in your agent:

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -35,11 +36,68 @@ type Tool interface {
 }
 
 type ExecTool struct {
+	Service string     `yaml:"service"`
+	Command []string   `yaml:"command"`
+	Steps   []ExecStep `yaml:"steps"`
+}
+
+type ExecStep struct {
 	Service string   `yaml:"service"`
 	Command []string `yaml:"command"`
+	Args    bool     `yaml:"args"`
 }
 
 func (ExecTool) isTool() {}
+
+func (t ExecTool) Validate() error {
+	if len(t.Steps) == 0 {
+		if t.Service == "" {
+			return errors.New("needs a service, or a steps list")
+		}
+		return nil
+	}
+	if t.Service != "" || len(t.Command) > 0 {
+		return errors.New("sets steps alongside service/command; use one form")
+	}
+	for i, step := range t.Steps {
+		if step.Service == "" || len(step.Command) == 0 {
+			return fmt.Errorf("step %d needs both a service and a command", i+1)
+		}
+	}
+	return nil
+}
+
+func (t ExecTool) Services() []string {
+	if len(t.Steps) == 0 {
+		return []string{t.Service}
+	}
+	var out []string
+	for _, step := range t.Steps {
+		if !slices.Contains(out, step.Service) {
+			out = append(out, step.Service)
+		}
+	}
+	return out
+}
+
+func (t ExecTool) Plan(args []string) ([]ExecStep, error) {
+	if len(t.Steps) == 0 {
+		return []ExecStep{{Service: t.Service, Command: slices.Concat(t.Command, args)}}, nil
+	}
+	plan := make([]ExecStep, len(t.Steps))
+	takesArgs := false
+	for i, step := range t.Steps {
+		plan[i] = ExecStep{Service: step.Service, Command: slices.Clone(step.Command)}
+		if step.Args {
+			takesArgs = true
+			plan[i].Command = append(plan[i].Command, args...)
+		}
+	}
+	if len(args) > 0 && !takesArgs {
+		return nil, errors.New("takes no arguments: no step sets `args: true`")
+	}
+	return plan, nil
+}
 
 type DBTool struct {
 	Service      string `yaml:"service"`
@@ -277,11 +335,9 @@ func DefaultFreshSetupForScaffold(scaffold string) string {
 	}
 }
 
-func (c *ProjectConfig) ResolvedTools() map[string]Tool {
-	if len(c.Tools) == 0 {
-		return nil
-	}
-	out := make(map[string]Tool, len(c.Tools))
+func (c *ProjectConfig) ResolvedTools(scaffoldTools map[string]Tool) map[string]Tool {
+	out := make(map[string]Tool, len(scaffoldTools)+len(c.Tools))
+	maps.Copy(out, scaffoldTools)
 	for k, v := range c.Tools {
 		out[k] = v
 	}

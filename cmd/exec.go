@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/signal"
@@ -180,15 +181,7 @@ func registerToolCommands() {
 		return
 	}
 
-	var tools map[string]config.Tool
-	if s, err := scaffold.Resolve(cfg); err == nil {
-		tools = s.Tools()
-	}
-	if userTools := cfg.ResolvedTools(); userTools != nil {
-		tools = userTools
-	}
-
-	for name, tool := range tools {
+	for name, tool := range resolvedTools(cfg) {
 		switch t := tool.(type) {
 		case config.ExecTool:
 			registerExecCommand(name, t)
@@ -198,13 +191,36 @@ func registerToolCommands() {
 	}
 }
 
+func resolvedTools(cfg config.ProjectConfig) map[string]config.Tool {
+	var scaffoldTools map[string]config.Tool
+	if s, err := scaffold.Resolve(cfg); err == nil {
+		scaffoldTools = s.Tools()
+	}
+	return cfg.ResolvedTools(scaffoldTools)
+}
+
+func execToolSummary(name string, t config.ExecTool) string {
+	services := t.Services()
+	if len(services) == 1 {
+		return "Run " + name + " in the " + services[0] + " container"
+	}
+	return "Run " + name + " across the " + strings.Join(services[:len(services)-1], ", ") + " and " + services[len(services)-1] + " containers"
+}
+
 func registerExecCommand(name string, t config.ExecTool) {
 	rootCmd.AddCommand(&cobra.Command{
 		Use:                name,
-		Short:              "Run " + name + " in the " + t.Service + " container",
+		Short:              execToolSummary(name, t),
 		GroupID:            "scaffold",
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := t.Validate(); err != nil {
+				return fmt.Errorf("tool %s %w", name, err)
+			}
+			plan, err := t.Plan(args)
+			if err != nil {
+				return fmt.Errorf("tool %s %w", name, err)
+			}
 			// Flag parsing is disabled so every arg passes straight through to
 			// the tool — including the tool's own -w/--workspace (e.g. npm
 			// workspaces). Select a Slate workspace before the tool name
@@ -225,11 +241,24 @@ func registerExecCommand(name string, t config.ExecTool) {
 			if err != nil {
 				return err
 			}
-			fullCmd := append([]string(nil), t.Command...)
-			fullCmd = append(fullCmd, args...)
-			return compose.Exec(env, t.Service, fullCmd...)
+			return runExecPlan(plan, cmd.ErrOrStderr(), func(service string, command ...string) error {
+				return compose.Exec(env, service, command...)
+			})
 		},
 	})
+}
+
+func runExecPlan(plan []config.ExecStep, progress io.Writer, run func(service string, command ...string) error) error {
+	if len(plan) == 1 {
+		return run(plan[0].Service, plan[0].Command...)
+	}
+	for i, step := range plan {
+		fmt.Fprintln(progress, dimStyle.Render(fmt.Sprintf("[%d/%d] %s: %s", i+1, len(plan), step.Service, strings.Join(step.Command, " "))))
+		if err := run(step.Service, step.Command...); err != nil {
+			return fmt.Errorf("step %d of %d (%s) failed: %w", i+1, len(plan), step.Service, err)
+		}
+	}
+	return nil
 }
 
 func registerDBCommand(name string, t config.DBTool) {
